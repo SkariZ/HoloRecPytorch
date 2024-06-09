@@ -1,0 +1,25 @@
+# OS generated files #
+######################
+.DS_Store
+.DS_Store?
+
+# Other files #
+.vscode
+
+# cache files
+*.pyc
+__pycache__/
+/__pycache__/
+*.so
+lightning_logs/
+.ipynb_checkpoints/
+
+# data files
+*.csv
+*.json
+*.pkl
+*.npy
+/data/
+/data/*
+/Old_Code/
+/Old_Code/*
