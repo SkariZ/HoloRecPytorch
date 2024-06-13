@@ -3,9 +3,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import other_utils as ou
-import reconstruction_utils as ru
 
-class HolographicReconstruction(nn.Module):
+from reconstruction_utils import PolynomialFitter, PhaseFrequencyFilter, FourierPeakFinder
+
+class HolographicReconstruction(nn.Module, PolynomialFitter, PhaseFrequencyFilter, FourierPeakFinder):
     def __init__(
             self,
             image_size=(1450, 1930),
@@ -18,6 +19,8 @@ class HolographicReconstruction(nn.Module):
             ):
 
         super(HolographicReconstruction, self).__init__()
+        super(PolynomialFitter, self).__init__()
+        super(PhaseFrequencyFilter, self).__init__()
 
         # Parameters
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -32,8 +35,16 @@ class HolographicReconstruction(nn.Module):
 
         # Do precalculations
         if do_precalculations:
-            self.precalculations()
-
+            self.precalculations() if first_image is not None else print("No first image given. Cannot do precalculations.")
+            super(FourierPeakFinder, self).__init__(
+                self.position_matrix, 
+                self.filter_radius, 
+                self.correct_fourier_peak, 
+                self.KX, 
+                self.KY, 
+                self.X, 
+                self.Y
+                )
 
 
     def precalculations(self):
@@ -45,7 +56,7 @@ class HolographicReconstruction(nn.Module):
         yr, xr = self.first_image.shape
         
         #Set the filter radius if not set
-        if not isinstance(filter_radius, (int, torch.uint8)):
+        if not isinstance(self.filter_radius, (int, torch.uint8)):
             self.filter_radius = int(min(torch.tensor([xr, yr])).item() / 7)
 
         #Generate coordinates for full frame
@@ -53,7 +64,7 @@ class HolographicReconstruction(nn.Module):
         y = torch.arange(-(yr/2-1/2), (yr/2 + 1/2), 1, device=self.first_image.device)
 
         self.X, self.Y = torch.meshgrid(x, y, indexing='ij')
-        self.position_matrix = torch.sqrt(X**2 + Y**2)#Distance from center
+        self.position_matrix = torch.sqrt(X**2 + Y**2) #Distance from center
         
         #Cropping the field to avoid edge effects
         if self.crop > 0:
