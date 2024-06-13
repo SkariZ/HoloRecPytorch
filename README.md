@@ -1,2 +1,1 @@
-# TomoNnRot
- Rotation parameter estimation from projections for tomographic reconstruction
+# Holographic Reconstruction in Pytorch
