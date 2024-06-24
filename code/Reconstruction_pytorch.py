@@ -19,8 +19,8 @@ class HolographicReconstruction(nn.Module):
             poly_dims=4,
             mask_radiis=None,
             mask_case="ellipse",
-            recalculate_offset=False,
-            phase_corrections=3,
+            recalculate_offset=True,
+            phase_corrections=1,
             ):
 
         super(HolographicReconstruction, self).__init__()
@@ -121,30 +121,32 @@ class HolographicReconstruction(nn.Module):
         self.first_phase = torch.angle(self.first_field).to(self.device)
 
         #First phase background
-        self.phase_background, self.first_phase_sub = self.PF.fit_and_subtract_phase_background_torch(self.first_phase)
+        #self.phase_background, self.first_phase_sub = self.PF.fit_and_subtract_phase_background_torch(self.first_phase)
+        self.phase_background = torch.mean(self.first_phase)
         #self.phase_background = self.PF.correct_phase_4order(self.first_phase)
 
         #First corrected field
-        self.first_field_corrected = torch.exp(1j*self.phase_background) * self.first_field
+        self.first_field_corrected = torch.exp(-1j * self.phase_background) * self.first_field
 
     def masks_precalculate(self):
         """
         Precalculate the masks for the reconstruction. The first mask is for the area of which we extract information from the hologram.
-        The 2, 3, 4 are for lowpass filtering the phase.
+        Is set in the filter_radius. The 2, 3 are for lowpass filtering the phase.
+        The 2, 3 are for lowpass filtering the phase.
         """
 
         self.mask_list = []
         if self.mask_radiis is not None:
             for i, rad_curr in enumerate(self.mask_radiis):
-                if i < 2:
+
+                if i == 0:
                     if self.mask_case == 'ellipse':
-                        m = OU.create_ellipse_mask(self.xr, self.yr, percent=rad_curr/self.xr)
-                            
+                        m = OU.create_ellipse_mask(self.xr, self.yr, percent=self.filter_radius/self.xr)
                     elif self.mask_case == 'circular':
-                        m = OU.create_circular_mask(self.xr, self.yr, radius=rad_curr)
+                        m = OU.create_circular_mask(self.xr, self.yr, radius=self.filter_radius)
                 else:
                     if self.mask_case == 'ellipse':
-                        m = OU.create_ellipse_mask(self.xrc, self.yrc, percent=rad_curr/self.xr)
+                        m = OU.create_ellipse_mask(self.xrc, self.yrc, percent=rad_curr/self.xrc)
                     elif self.mask_case == 'circular':
                         m = OU.create_circular_mask(self.xrc, self.yrc, radius=rad_curr)
 
@@ -154,7 +156,7 @@ class HolographicReconstruction(nn.Module):
             self.rad = self.mask_radiis[0]
 
         else:
-            self.rad = int(torch.round(torch.max(torch.tensor([self.xr, self.yr], dtype=torch.float32))) / 6)
+            self.rad = self.filter_radius
             if self.mask_case == 'ellipse':
                 m = OU.create_ellipse_mask(self.xr, self.yr, percent=self.rad/self.yr)
 
@@ -184,6 +186,9 @@ class HolographicReconstruction(nn.Module):
         print(f"Reconstructing {holograms.shape[0]} holograms.")
         for i, holo in enumerate(holograms):
 
+            #Subtract the mean
+            holo = holo - holo.mean()
+
             #Compute the 2-dimensional discrete Fourier Transform with offset image.
             if not self.recalculate_offset:
                 fftImage = torch.fft.fftshift(
@@ -192,53 +197,42 @@ class HolographicReconstruction(nn.Module):
                         )) * self.mask_list[0]
             else:
                 #Find the peak coordinates
-                kx_add_ky, dist_peak = self.FPF.find_peak_coordinates(holo)
+                self.kx_add_ky, _ = self.FPF.find_peak_coordinates(holo)
                 fftImage = torch.fft.fftshift(
                     torch.fft.fft2(
-                        holo * torch.exp(1j*(kx_add_ky))
+                        holo * torch.exp(1j*(self.kx_add_ky))
                         )) * self.mask_list[0]
 
             #Inverse 2-dimensional discrete Fourier Transform
-            E_field = torch.fft.ifft2(fftImage)
+            fftImage2 = torch.fft.ifft2(torch.fft.fftshift(fftImage))
 
             #If we use the previous phase background to correct the phase first.
-            if self.phase_background is not None:
-                E_field = E_field * torch.exp(-1j * self.phase_background)
+            #if self.phase_background is not None:
+            #    reconstructed_fields[i] = reconstructed_fields[i] * torch.exp(-1j * self.phase_background)
 
             #Removes edges in x and y. Some edge effects
             if self.crop > 0:
-                E_field = E_field[self.crop:-self.crop, self.crop:-self.crop]
+                fftImage2 = fftImage2[self.crop:-self.crop, self.crop:-self.crop]
+            reconstructed_fields[i] = fftImage2
 
             #Lowpass filtered phase
             if self.lowpass_filtered_phase is not None:
-                phase_img = OU.phase_frequencefilter(E_field, mask = self.mask_list[1], is_field = True)
+                phase_img = OU.phase_frequencefilter(reconstructed_fields[i], mask=self.mask_list[1], is_field=True)
             else:
-                phase_img = torch.angle(E_field)
-    
-            #Get the phase background from phase image.
-            self.phase_background, self.first_phase_sub = self.PF.fit_and_subtract_phase_background_torch(phase_img)
-            #self.phase_background = self.PF.correct_phase_4order(phase_img)
+                phase_img = torch.angle(reconstructed_fields[i])
 
             #Correct the field with the phase background
-            E_field =  E_field * torch.exp(-1j * self.phase_background)
+            reconstructed_fields[i] = reconstructed_fields[i] * torch.exp(-1j * phase_img)
 
             if self.phase_corrections > 0:
                 for _ in range(self.phase_corrections):
                     if self.lowpass_filtered_phase is not None:
-                        phase_img = OU.phase_frequencefilter(E_field, mask = self.mask_list[2], is_field = True)
-                    else:
-                        phase_img = torch.angle(E_field)
+                        phase_img = OU.phase_frequencefilter(reconstructed_fields[i], mask=self.mask_list[2], is_field=True)
 
-                    self.phase_background, self.first_phase_sub = self.PF.fit_and_subtract_phase_background_torch(phase_img)
-                    #self.phase_background = self.PF.correct_phase_4order(phase_img)
+                        reconstructed_fields[i] = reconstructed_fields[i] * torch.exp(-1j * phase_img)
 
-                    E_field = E_field * torch.exp(-1j * self.phase_background)
-
-            #Correct E_field again
-            E_field = E_field * torch.exp(-1j * torch.mean(torch.angle(E_field)))
-
-            #Store the field
-            reconstructed_fields[i] = E_field
+            #Correct reconstructed_fields[i]
+            reconstructed_fields[i] = reconstructed_fields[i] * torch.exp(-1j * torch.mean(torch.angle(reconstructed_fields[i])))
 
 
         return reconstructed_fields

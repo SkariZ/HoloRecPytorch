@@ -51,7 +51,7 @@ class PolynomialFitter:
                 index += 1
         return z
 
-    def fit_and_subtract_phase_background_torch(self, phase_data, poly_background=None):
+    def fit_background(self, phase_data, poly_background=None):
         """Fit a polynomial to the phase background and subtract it using PyTorch."""
         device = phase_data.device
         x, y = torch.meshgrid(torch.arange(phase_data.size(0), dtype=torch.float32, device=device), 
@@ -65,64 +65,65 @@ class PolynomialFitter:
             # Evaluate the polynomial on the grid
             poly_background = self.polyval2d_torch(x, y, coeffs)
         
-        # Subtract the polynomial background
-        corrected_phase = phase_data - poly_background
-        
-        return corrected_phase, poly_background
+        return poly_background
 
-    def generate_phase_pattern(self, order=4, freq=0.1, noise_level=0.05):
-        """Generate a synthetic phase pattern with polynomial background and sinusoidal components."""
-        
+    def generate_phase_pattern(self, num_waves=3, freq_range=(0.025, 0.1), noise_level=0.05):
+        """
+        Generate a phase pattern with a few waves and noise.
+
+        Parameters
+        ----------
+        num_waves : int, optional
+            The number of sine waves to combine. Default is 3.
+        freq_range : tuple, optional
+            The range of frequencies for the sine waves. Default is (0.05, 0.15).
+        noise_level : float, optional
+            The standard deviation of the random noise. Default is 0.05.
+
+        Returns
+        -------
+        phase_data : torch.Tensor
+            The generated phase pattern.
+        """
         x, y = torch.meshgrid(
-            torch.arange(self.shape[0], dtype=torch.float32), 
-            torch.arange(self.shape[1], dtype=torch.float32),
+            torch.arange(self.shape[0], dtype=torch.float32, device=self.device),
+            torch.arange(self.shape[1], dtype=torch.float32, device=self.device),
             indexing='ij'
-            )
-        
-        # Polynomial components
-        poly_background = (
-            0.1 * x +
-            0.05 * y +
-            0.01 * x * y +
-            0.001 * x**2 +
-            0.002 * y**2 -
-            0.005 * x**3 +
-            0.003 * x**2 * y -
-            0.002 * x * y**2 +
-            0.001 * y**3
         )
-        
-        # Sinusoidal components with varying frequencies
-        sinusoidal_component1 = torch.sin(freq * x) + torch.cos(freq * y)
-        sinusoidal_component2 = torch.sin(2 * freq * x) + torch.cos(2 * freq * y)
-        
-        # Combine components with noise
-        phase_pattern = poly_background + sinusoidal_component1 + sinusoidal_component2 + noise_level * torch.randn(self.shape, dtype=torch.float32)
-        phase_pattern/=phase_pattern.max()
 
-        return phase_pattern
+        phase_data = torch.zeros_like(x, device=self.device)
+        for _ in range(num_waves):
+            freq_x = torch.rand(1).item() * (freq_range[1] - freq_range[0]) + freq_range[0]
+            freq_y = torch.rand(1).item() * (freq_range[1] - freq_range[0]) + freq_range[0]
+            phase_shift_x = torch.rand(1).item() * 2 * torch.pi
+            phase_shift_y = torch.rand(1).item() * 2 * torch.pi
+            phase_data += torch.sin(2 * torch.pi * (freq_x * x + freq_y * y) + phase_shift_x + phase_shift_y)
+
+        # Add noise
+        noise = noise_level * torch.randn_like(phase_data, device=self.device)
+        phase_data += noise
+
+        return phase_data
+
 
 class PolynomialFitterV2:
-    def __init__(self, input_shape, device='cuda'):
-        self.input_shape = input_shape
+    def __init__(self, shape, device='cuda'):
+        self.shape = shape
         self.device = device if device is not None else 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.polynomial = self.get_4th_polynomial(input_shape).to(self.device)
-        self.G_matrix = self.get_G_matrix(input_shape).to(self.device)
+        self.polynomial = self.get_4th_polynomial().to(self.device)
+        self.G_matrix = self.get_G_matrix().to(self.device)
 
-    def get_4th_polynomial(self, input_shape):
+    def get_4th_polynomial(self):
         """
         Function that retrieves the 4th-order polynomial
 
-        Input:
-            input_shape : Shape of matrix
         Output :
             Polynomial matrix. 
         """
-        yrc, xrc = input_shape
 
-        xc = torch.arange(-xrc / 2 + 0.5, xrc / 2 + 0.5, 1, device=self.device)
-        yc = torch.arange(-yrc / 2 + 0.5, yrc / 2 + 0.5, 1, device=self.device)
-        Y_c, X_c = torch.meshgrid(yc, xc)
+        X_c, Y_c = torch.meshgrid(torch.arange(self.shape[0], dtype=torch.float32, device=self.device), 
+                                  torch.arange(self.shape[1], dtype=torch.float32, device=self.device), 
+                                  indexing='ij')
 
         # 4th order polynomial.
         polynomial = [
@@ -144,24 +145,22 @@ class PolynomialFitterV2:
 
         return torch.stack(polynomial)
 
-    def get_G_matrix(self, input_shape):
+    def get_G_matrix(self):
         """
-        Input:
-            input_shape : Shape of matrix
         Output:
             Matrix to store 4-order polynomial. (Not including constant)
         """
-        yrc, xrc = input_shape
-
-        xc = torch.arange(-xrc / 2 + 0.5, xrc / 2 + 0.5, 1, device=self.device)
-        yc = torch.arange(-yrc / 2 + 0.5, yrc / 2 + 0.5, 1, device=self.device)
-        Y_c, X_c = torch.meshgrid(yc, xc)
+        X_c, Y_c = torch.meshgrid(torch.arange(self.shape[0], dtype=torch.float32, device=self.device), 
+                                  torch.arange(self.shape[1], dtype=torch.float32, device=self.device), 
+                                  indexing='ij')
 
         # Vectors of equal size. x1 and y1 spatial coordinates
         x1 = 1 / 2 * ((X_c[1:, 1:] + X_c[:-1, :-1])).flatten()
         y1 = 1 / 2 * ((Y_c[1:, 1:] + Y_c[:-1, :-1])).flatten()
 
-        G = torch.zeros((2 * (xrc - 1) * (yrc - 1), 14), device=self.device)  # Matrix to store 4-order polynomial. (Not including constant)
+        #G = torch.zeros((2 * (xrc - 1) * (yrc - 1), 14), device=self.device)  # Matrix to store 4-order polynomial. (Not including constant)
+        G = torch.zeros((2 * (self.shape[0] - 1) * (self.shape[1] - 1), 14), device=self.device)
+
         G_end = G.shape[0]
         # (derivate w.r.t to X and Y respectively.)
         uneven_range = torch.arange(1, G_end + 1, 2, device=self.device)
@@ -398,7 +397,7 @@ if __name__ == "__main__":
     fitter = PolynomialFitter(order=5)
     
     # Generate example phase data (replace with your actual data)
-    phase_data = fitter.generate_phase_pattern(order=5, freq=0.1, noise_level=0.05)
+    phase_data = fitter.generate_phase_pattern(num_waves=1, freq_range=(0.025,0.01)).to('cuda')
     phase_data.requires_grad = False  # Ensure phase_data does not require gradients
     
     # Fit and subtract the polynomial background
@@ -409,19 +408,282 @@ if __name__ == "__main__":
     
     plt.figure(figsize=(12, 6))
     plt.subplot(1, 3, 1)
-    plt.imshow(phase_data.numpy(), cmap='viridis')
+    plt.imshow(phase_data.cpu().numpy(), cmap='viridis')
     plt.title('Original Phase Data')
     plt.colorbar()
 
     plt.subplot(1, 3, 2)
-    plt.imshow(poly_background.numpy(), cmap='viridis')
+    plt.imshow(poly_background.cpu().numpy(), cmap='viridis')
     plt.title('Fitted Polynomial Background')
     plt.colorbar()
 
     plt.subplot(1, 3, 3)
-    plt.imshow(corrected_phase.numpy(), cmap='viridis')
+    plt.imshow(corrected_phase.cpu().numpy(), cmap='viridis')
     plt.title('Corrected Phase Data')
     plt.colorbar()
 
     plt.tight_layout()
     plt.show()
+
+import torch
+import torch.nn as nn
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Polynomial model
+class Polynomial2DModel(nn.Module):
+    def __init__(self, 
+                 degree_x, 
+                 degree_y, 
+                 device='cuda', 
+                 num_epochs=100000, 
+                 loss_tolerance=1e-3, 
+                 lr=0.005,
+                 patience=2500
+                 ):
+        super(Polynomial2DModel, self).__init__()
+
+        self.device = device
+        self.degree_x = degree_x
+        self.degree_y = degree_y
+        self.num_epochs = num_epochs
+        self.loss_tolerance = loss_tolerance
+
+        # Create parameters for each polynomial coefficient
+        self.coefficients = nn.ParameterList(
+            [nn.Parameter(torch.randn(1).to(self.device)) for _ in range((degree_x + 1) * (degree_y + 1))]
+        )
+
+        # Optimizer and loss function
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=lr)
+        self.criterion = nn.L1Loss()
+        self.learning_rate_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            self.optimizer, mode='min', factor=0.75, patience=patience // 2
+            )
+        self.patience = patience
+
+    def forward(self, x, y):
+        out = torch.zeros_like(x).to(self.device)
+        idx = 0
+        for i in range(self.degree_x + 1):
+            for j in range(self.degree_y + 1):
+                out += self.coefficients[idx] * (x ** i) * (y ** j)
+                idx += 1
+        return out
+
+    def fit(self, x, y, z, n_init=10):
+        x, y, z = x.flatten(), y.flatten(), z.flatten()
+        x = torch.tensor(x, dtype=torch.float32).unsqueeze(1).to(self.device)
+        y = torch.tensor(y, dtype=torch.float32).unsqueeze(1).to(self.device)
+        z = torch.tensor(z, dtype=torch.float32).unsqueeze(1).to(self.device)
+
+        print(f'Fitting a {self.degree_x}x{self.degree_y} polynomial to the data...')
+
+        # Initialize the coefficients a few times and keep the best one
+        best_loss = np.inf
+        best_coeffs = None
+        if n_init > 1:
+            print('Initializing coefficients...')
+            for _ in range(n_init):
+                for param in self.parameters():
+                    param.data = torch.randn(1).to(self.device)
+                for _ in range(50):
+                    self.optimizer.zero_grad()
+                    outputs = self(x, y)
+                    loss = self.criterion(outputs, z)
+                    loss.backward()
+                    self.optimizer.step()
+                if loss.item() < best_loss:
+                    best_loss = loss.item()
+                    best_coeffs = [param.data.clone() for param in self.parameters()]
+
+            # Set the best coefficients
+            for i, param in enumerate(self.parameters()):
+                param.data = best_coeffs[i]
+
+        # Train the model
+        patience_counter = 0
+        for epoch in range(self.num_epochs):
+            #self.train()
+            outputs = self(x, y)
+            loss = self.criterion(outputs, z)
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
+            self.learning_rate_scheduler.step(loss)
+
+
+            if loss.item() < best_loss - self.loss_tolerance:
+                best_loss = loss.item()
+                patience_counter = 0
+            else:
+                patience_counter += 1
+
+            if patience_counter > self.patience:
+                print(f'Early stopping at epoch {epoch + 1} with best loss: {best_loss:.4f}')
+                break
+
+            if (epoch + 1) % 1000 == 0:
+                print(f'Epoch [{epoch + 1}/{self.num_epochs}], Loss: {loss.item():.4f}')
+
+# Polynomial model
+class Polynomial2DModelNN(nn.Module):
+    def __init__(self,
+                 input_dim=2,
+                 output_dim=1,
+                 n_hidden_layers=6,
+                 hidden_dim=64, 
+                 device='cuda', 
+                 num_epochs=100000, 
+                 loss_tolerance=1e-3, 
+                 lr=8e-3,
+                 patience=2500
+                 ):
+        
+        super(Polynomial2DModelNN, self).__init__()
+
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.n_hidden_layers = n_hidden_layers
+        self.hidden_dim = hidden_dim
+        self.device = device
+        self.num_epochs = num_epochs
+        self.loss_tolerance = loss_tolerance
+
+        # Define the neural network
+        self.network = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.LeakyReLU(0.2)
+        )
+        for _ in range(n_hidden_layers - 1):
+            self.network.add_module('hidden', nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.LeakyReLU(0.2)
+            ))
+        #Downsample
+        self.network.add_module('downsample', nn.Linear(hidden_dim, hidden_dim // 2))
+        self.network.add_module('leaky_relu', nn.LeakyReLU(0.2))
+        self.network.add_module('output', nn.Linear(hidden_dim // 2, output_dim))
+
+        # Optimizer and loss function
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=lr)
+        self.criterion = nn.MSELoss()
+        self.learning_rate_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            self.optimizer, mode='min', factor=0.75, patience=patience // 2
+            )
+        self.patience = patience
+
+    def forward(self, x):
+        return self.network(x)
+
+    def fit(self, x, y, z):
+        x, y, z = x.flatten(), y.flatten(), z.flatten()
+        
+        x = x.clone().detach().unsqueeze(1).to(self.device)
+        y = y.clone().detach().unsqueeze(1).to(self.device)
+        z = z.clone().detach().unsqueeze(1).to(self.device)
+
+        input_data = torch.cat((x, y), dim=1)
+
+        best_loss = np.inf
+        patience_counter = 0
+        for epoch in range(self.num_epochs):
+            self.train()
+            outputs = self(input_data)
+            loss = self.criterion(outputs, z)
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
+            self.learning_rate_scheduler.step(loss)
+
+            if loss.item() < best_loss - self.loss_tolerance:
+                best_loss = loss.item()
+                patience_counter = 0
+            else:
+                patience_counter += 1
+
+            if patience_counter > self.patience:
+                print(f'Early stopping at epoch {epoch + 1} with best loss: {best_loss:.4f}')
+                break
+
+            if (epoch + 1) % 1000 == 0:
+                print(f'Epoch [{epoch + 1}/{self.num_epochs}], Loss: {loss.item():.4f}')
+
+if False:
+    # Generate synthetic 2D data
+    x = np.linspace(0, 10, 10)
+    y = np.linspace(0, 10, 10)
+    X, Y = np.meshgrid(x, y)
+    Z = 2.5*np.random.rand() * X**2 - np.random.rand() * X + np.random.rand() * Y**2 + np.random.rand() * Y + np.random.normal(0, 5, X.shape)  # Quadratic 2D data with noise
+    #Normalize data
+    Z = Z - np.min(Z)
+    Z = Z / np.max(Z)
+
+
+    # Flatten the data for PyTorch
+    x_flat = X.flatten()
+    y_flat = Y.flatten()
+    z_flat = Z.flatten()
+
+    # Convert to PyTorch tensors
+    x_tensor = torch.tensor(x_flat, dtype=torch.float32).unsqueeze(1).to('cuda')
+    y_tensor = torch.tensor(y_flat, dtype=torch.float32).unsqueeze(1).to('cuda')
+    z_tensor = torch.tensor(z_flat, dtype=torch.float32).unsqueeze(1).to('cuda')
+
+    degree_x = 2  # Degree of the polynomial in x
+    degree_y = 2  # Degree of the polynomial in y
+    model = Polynomial2DModel(degree_x, degree_y)
+    criterion = nn.MSELoss()  # Mean Squared Error Loss
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+
+    model.to('cuda')
+
+    model.fit(x_flat, y_flat, z_flat, n_init=10)
+
+
+    """
+    num_epochs = 10000
+    for epoch in range(num_epochs):
+        model.train()
+        
+        # Forward pass
+        outputs = model(x_tensor, y_tensor)
+        loss = criterion(outputs, z_tensor)
+        
+        # Backward pass and optimization
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        
+        if (epoch + 1) % 100 == 0:
+            print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {loss.item():.4f}')
+    """
+
+    model.eval()
+    with torch.no_grad():
+        fitted_z = model(x_tensor, y_tensor).cpu().numpy().reshape(X.shape)
+
+    plt.figure(figsize=(10, 5))
+
+    # Original data
+    plt.subplot(1, 2, 1)
+    plt.title('Original Data')
+    plt.contourf(X, Y, Z, cmap='viridis')
+    plt.colorbar()
+
+    # Fitted data
+    plt.subplot(1, 2, 2)
+    plt.title('Fitted Polynomial Background')
+    plt.contourf(X, Y, fitted_z, cmap='viridis')
+    plt.colorbar()
+
+    plt.show()
+
+    #Difference
+    plt.figure(figsize=(5, 5))
+    plt.title('Difference between Original and Fitted Data')
+    plt.contourf(X, Y, Z - fitted_z, cmap='viridis')
+    plt.colorbar()
+    plt.show()
+
+

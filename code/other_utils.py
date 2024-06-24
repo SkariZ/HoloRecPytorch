@@ -67,3 +67,32 @@ def create_ellipse_mask(h, w, center=None, radius_h=None, radius_w=None, percent
     # Set pixels within the ellipse to 1
     mask = ellipse_equation <= 1
     return mask
+
+def phase_frequencefilter(field, mask, is_field=True, crop=0):
+    """
+    Lowpass filter the image with mask defined in inpu.
+
+    Input:
+        field : Complex valued field.
+        mask : Mask (binary 2D image)
+        is_field : if input is a field, or if needs to be forier transformed before.
+        crop : if we shall crop the ouput slightly
+    Output:
+        phase_img : phase of optical field.
+    """
+    if is_field:
+        freq = torch.fft.fftshift(torch.fft.fft2(field))
+    else:
+        freq = field
+        
+    #construct low-pass mask
+    freq_low = freq * mask
+    
+    E_field = torch.fft.ifft2(torch.fft.fftshift(freq_low)) #Shift the zero-frequency component to the center of the spectrum. and compute inverse fft
+    
+    if crop > 0:
+        phase_img = torch.angle(E_field[crop:-crop, crop:-crop])
+    else:
+        phase_img = torch.angle(E_field)
+    
+    return phase_img
