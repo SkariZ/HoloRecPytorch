@@ -3,8 +3,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import other_utils as OU
+import fft_loader as FL
 
 from reconstruction_utils import PolynomialFitter, PolynomialFitterV2, PhaseFrequencyFilter, FourierPeakFinder
+
 
 class HolographicReconstruction(nn.Module):
     def __init__(
@@ -21,6 +23,7 @@ class HolographicReconstruction(nn.Module):
             mask_case="ellipse",
             recalculate_offset=True,
             phase_corrections=1,
+            fft_save=False
             ):
 
         super(HolographicReconstruction, self).__init__()
@@ -29,7 +32,7 @@ class HolographicReconstruction(nn.Module):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
         self.image_size = image_size
-        self.first_image = first_image.to(self.device) if first_image is not None else None
+        self.first_image = torch.tensor(first_image).to(self.device) if first_image is not None else None
         self.crop = crop
         self.lowpass_filtered_phase = lowpass_filtered_phase
         self.filter_radius = filter_radius
@@ -39,6 +42,10 @@ class HolographicReconstruction(nn.Module):
         self.mask_case = mask_case
         self.recalculate_offset = recalculate_offset
         self.phase_corrections = phase_corrections
+        self.fft_save = fft_save
+
+        if self.mask_radiis is not None:
+            self.mask_radiis = [self.filter_radius, 10, 5]
 
         # Do precalculations
         if do_precalculations:
@@ -76,8 +83,8 @@ class HolographicReconstruction(nn.Module):
         self.yrc = self.yr - self.crop*2
 
         if self.crop > 0:
-            xc = torch.arange(-(self.xrc/2-1/2), (self.xrc/2 + 1/2), 1, device=self.first_image.device)
-            yc = torch.arange(-(self.yrc/2-1/2), (self.yrc/2 + 1/2), 1, device=self.first_image.device)
+            xc = torch.arange(self.xrc, device=self.first_image.device) - self.xrc // 2
+            yc = torch.arange(self.yrc, device=self.first_image.device) - self.yrc // 2
             self.Y_c, self.X_c = torch.meshgrid(xc, yc, indexing='ij')
         else:
             self.X_c = self.X
@@ -113,7 +120,7 @@ class HolographicReconstruction(nn.Module):
             ) * self.mask_list[0]
         
         # Initialize the PolynomialFitter class. This class is used to fit a polynomial to the phase.
-        self.PF = PolynomialFitter(order=self.poly_dims, shape=self.first_image.shape, device=self.device)
+        #self.PF = PolynomialFitter(order=self.poly_dims, shape=self.first_image.shape, device=self.device)
         #self.PF = PolynomialFitterV2(input_shape=self.first_image.shape)
 
         # Calculate the first field and phase
@@ -234,6 +241,9 @@ class HolographicReconstruction(nn.Module):
             #Correct reconstructed_fields[i]
             reconstructed_fields[i] = reconstructed_fields[i] * torch.exp(-1j * torch.mean(torch.angle(reconstructed_fields[i])))
 
+            #Save the fft instead of the field if fft_save is True 
+            if self.fft_save:
+                reconstructed_fields = FL.field_to_vec_multi(reconstructed_fields, self.rad, mask=self.mask_list[0])
 
         return reconstructed_fields
 
