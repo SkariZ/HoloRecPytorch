@@ -1,6 +1,10 @@
 from itertools import product
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
+import matplotlib.pyplot as plt
+
 
 class PolynomialFitter:
     def __init__(
@@ -244,6 +248,7 @@ class PhaseFrequencyFilter:
         self,
         crop=0,
         ):
+
         self.crop = crop
     
     def filter(self, field, mask, is_field=True):
@@ -364,71 +369,6 @@ class FourierPeakFinder:
         kx_add_ky = kx_pos * self.X + ky_pos * self.Y
 
         return kx_add_ky, dist_peak
-
-# Example usage:
-if __name__ == "__main__":
-    # Example data (replace with your actual data)
-    
-    filter_radius = 20
-    correct_fourier_peak = (0, 0)
-    X = torch.randn(256, 256)  # Example X matrix (replace with actual X and Y matrices)
-    Y = torch.randn(256, 256)  # Example Y matrix
-    position_matrix = torch.sqrt(X**2 + Y**2)  # Example position_matrix (computed previously)
-    KX = torch.randn(X.shape)  # Example KX (replace with actual KX and KY)
-    KY = torch.randn(Y.shape)  # Example KY
-
-    # Initialize FourierPeakFinder
-    finder = FourierPeakFinder(position_matrix, filter_radius, correct_fourier_peak, KX, KY, X, Y)
-
-    # Example frame (replace with actual frame)
-    frame = torch.randn(256, 256)*5
-
-    # Find peak coordinates in Fourier space
-    kx_add_ky, dist_peak = finder.find_peak_coordinates(frame)
-
-    # Use kx_add_ky and dist_peak as needed in your further processing
-    print(kx_add_ky.shape)
-
-
-
-# Example usage
-if __name__ == "__main__":
-    # Create an instance of PolynomialFitter
-    fitter = PolynomialFitter(order=5)
-    
-    # Generate example phase data (replace with your actual data)
-    phase_data = fitter.generate_phase_pattern(num_waves=1, freq_range=(0.025,0.01)).to('cuda')
-    phase_data.requires_grad = False  # Ensure phase_data does not require gradients
-    
-    # Fit and subtract the polynomial background
-    corrected_phase, poly_background = fitter.fit_and_subtract_phase_background_torch(phase_data)
-    
-    # Visualize the results
-    import matplotlib.pyplot as plt
-    
-    plt.figure(figsize=(12, 6))
-    plt.subplot(1, 3, 1)
-    plt.imshow(phase_data.cpu().numpy(), cmap='viridis')
-    plt.title('Original Phase Data')
-    plt.colorbar()
-
-    plt.subplot(1, 3, 2)
-    plt.imshow(poly_background.cpu().numpy(), cmap='viridis')
-    plt.title('Fitted Polynomial Background')
-    plt.colorbar()
-
-    plt.subplot(1, 3, 3)
-    plt.imshow(corrected_phase.cpu().numpy(), cmap='viridis')
-    plt.title('Corrected Phase Data')
-    plt.colorbar()
-
-    plt.tight_layout()
-    plt.show()
-
-import torch
-import torch.nn as nn
-import numpy as np
-import matplotlib.pyplot as plt
 
 # Polynomial model
 class Polynomial2DModel(nn.Module):
@@ -608,82 +548,3 @@ class Polynomial2DModelNN(nn.Module):
 
             if (epoch + 1) % 1000 == 0:
                 print(f'Epoch [{epoch + 1}/{self.num_epochs}], Loss: {loss.item():.4f}')
-
-if False:
-    # Generate synthetic 2D data
-    x = np.linspace(0, 10, 10)
-    y = np.linspace(0, 10, 10)
-    X, Y = np.meshgrid(x, y)
-    Z = 2.5*np.random.rand() * X**2 - np.random.rand() * X + np.random.rand() * Y**2 + np.random.rand() * Y + np.random.normal(0, 5, X.shape)  # Quadratic 2D data with noise
-    #Normalize data
-    Z = Z - np.min(Z)
-    Z = Z / np.max(Z)
-
-
-    # Flatten the data for PyTorch
-    x_flat = X.flatten()
-    y_flat = Y.flatten()
-    z_flat = Z.flatten()
-
-    # Convert to PyTorch tensors
-    x_tensor = torch.tensor(x_flat, dtype=torch.float32).unsqueeze(1).to('cuda')
-    y_tensor = torch.tensor(y_flat, dtype=torch.float32).unsqueeze(1).to('cuda')
-    z_tensor = torch.tensor(z_flat, dtype=torch.float32).unsqueeze(1).to('cuda')
-
-    degree_x = 2  # Degree of the polynomial in x
-    degree_y = 2  # Degree of the polynomial in y
-    model = Polynomial2DModel(degree_x, degree_y)
-    criterion = nn.MSELoss()  # Mean Squared Error Loss
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-
-    model.to('cuda')
-
-    model.fit(x_flat, y_flat, z_flat, n_init=10)
-
-
-    """
-    num_epochs = 10000
-    for epoch in range(num_epochs):
-        model.train()
-        
-        # Forward pass
-        outputs = model(x_tensor, y_tensor)
-        loss = criterion(outputs, z_tensor)
-        
-        # Backward pass and optimization
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        
-        if (epoch + 1) % 100 == 0:
-            print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {loss.item():.4f}')
-    """
-
-    model.eval()
-    with torch.no_grad():
-        fitted_z = model(x_tensor, y_tensor).cpu().numpy().reshape(X.shape)
-
-    plt.figure(figsize=(10, 5))
-
-    # Original data
-    plt.subplot(1, 2, 1)
-    plt.title('Original Data')
-    plt.contourf(X, Y, Z, cmap='viridis')
-    plt.colorbar()
-
-    # Fitted data
-    plt.subplot(1, 2, 2)
-    plt.title('Fitted Polynomial Background')
-    plt.contourf(X, Y, fitted_z, cmap='viridis')
-    plt.colorbar()
-
-    plt.show()
-
-    #Difference
-    plt.figure(figsize=(5, 5))
-    plt.title('Difference between Original and Fitted Data')
-    plt.contourf(X, Y, Z - fitted_z, cmap='viridis')
-    plt.colorbar()
-    plt.show()
-
-
