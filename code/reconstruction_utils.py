@@ -349,7 +349,7 @@ class FourierPeakFinder:
         fftImage = torch.abs(fftImage)
 
         # Apply Gaussian filter to the fftImage
-        fftImage = F.conv2d(fftImage.real.unsqueeze(0).unsqueeze(0), torch.ones(1, 1, 7, 7, device=fftImage.device) / 49, padding=1).squeeze()
+        fftImage = F.conv2d(fftImage.real.unsqueeze(0).unsqueeze(0), torch.ones(1, 1, 7, 7, device=fftImage.device) / 49, padding=3).squeeze()
 
         #Find the coordinates of the maximum values in the fftImage
         max_index = torch.argmax(fftImage)
@@ -370,7 +370,6 @@ class FourierPeakFinder:
 
         return kx_add_ky, dist_peak
 
-# Polynomial model
 class Polynomial2DModel(nn.Module):
     def __init__(self, 
                  degree_x, 
@@ -466,7 +465,6 @@ class Polynomial2DModel(nn.Module):
             if (epoch + 1) % 1000 == 0:
                 print(f'Epoch [{epoch + 1}/{self.num_epochs}], Loss: {loss.item():.4f}')
 
-# Polynomial model
 class Polynomial2DModelNN(nn.Module):
     def __init__(self,
                  input_dim=2,

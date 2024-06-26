@@ -16,14 +16,15 @@ class HolographicReconstruction(nn.Module):
             first_image=None,
             crop=0,
             lowpass_filtered_phase=None,
-            filter_radius=200,
+            filter_radius=None,
             correct_fourier_peak=(0, 0),
-            poly_dims=4,
             mask_radiis=None,
             mask_case="ellipse",
             recalculate_offset=True,
-            phase_corrections=1,
-            fft_save=False
+            phase_corrections=3,
+            fft_save=False,
+            kernel_size=27,
+            sigma=9
             ):
 
         super(HolographicReconstruction, self).__init__()
@@ -37,19 +38,37 @@ class HolographicReconstruction(nn.Module):
         self.lowpass_filtered_phase = lowpass_filtered_phase
         self.filter_radius = filter_radius
         self.correct_fourier_peak = correct_fourier_peak
-        self.poly_dims = poly_dims
         self.mask_radiis = mask_radiis
         self.mask_case = mask_case
         self.recalculate_offset = recalculate_offset
         self.phase_corrections = phase_corrections
         self.fft_save = fft_save
-
-        if self.mask_radiis is not None:
-            self.mask_radiis = [self.filter_radius, 10, 5]
+        self.kernel_size = kernel_size
+        self.sigma = sigma
 
         # Do precalculations
         if do_precalculations:
             self.precalculations() if first_image is not None else print("No first image given. Cannot do precalculations.")
+
+    def get_settings(self):
+        "Get the settings of the reconstruction, in a dictionary."
+
+        settings = {
+            "image_size": self.image_size,
+            "crop": self.crop,
+            "lowpass_filtered_phase": self.lowpass_filtered_phase,
+            "filter_radius": self.filter_radius,
+            "correct_fourier_peak": self.correct_fourier_peak,
+            "mask_radiis": self.mask_radiis,
+            "mask_case": self.mask_case,
+            "recalculate_offset": self.recalculate_offset,
+            "phase_corrections": self.phase_corrections,
+            "fft_save": self.fft_save,
+            "kernel_size": self.kernel_size,
+            "sigma": self.sigma
+            }
+
+        return settings
 
     def precalculations(self):
         """
@@ -68,7 +87,7 @@ class HolographicReconstruction(nn.Module):
         self.xr, self.yr = self.first_image.shape
         
         #Set the filter radius if not set
-        if not isinstance(self.filter_radius, (int, torch.uint8)):
+        if not isinstance(self.filter_radius, (int, float)):
             self.filter_radius = int(min(torch.tensor([self.xr, self.yr])).item() / 5)
 
         #Generate coordinates for full frame
@@ -143,47 +162,54 @@ class HolographicReconstruction(nn.Module):
         """
 
         self.mask_list = []
+
+        if self.mask_case == 'ellipse':
+            m = OU.create_ellipse_mask(self.xr, self.yr, percent=self.filter_radius/self.xr)
+        elif self.mask_case == 'circular':
+            m = OU.create_circular_mask(self.xr, self.yr, radius=self.filter_radius)
+
+        #Append the mask to the list
+        self.mask_list.append(m.to(self.device))
+
+        #Set the rad for the mask. Important for storing the fft later on.
+        self.rad = self.filter_radius
+
+        #Lowpass filter the phase-masks
         if self.mask_radiis is not None:
-            for i, rad_curr in enumerate(self.mask_radiis):
+            for _, rad_curr in enumerate(self.mask_radiis):
+                if self.mask_case == 'ellipse':
+                    m = OU.create_ellipse_mask(self.xrc, self.yrc, percent=rad_curr/self.xrc)
+                elif self.mask_case == 'circular':
+                    m = OU.create_circular_mask(self.xrc, self.yrc, radius=rad_curr)
 
-                if i == 0:
-                    if self.mask_case == 'ellipse':
-                        m = OU.create_ellipse_mask(self.xr, self.yr, percent=self.filter_radius/self.xr)
-                    elif self.mask_case == 'circular':
-                        m = OU.create_circular_mask(self.xr, self.yr, radius=self.filter_radius)
-                else:
-                    if self.mask_case == 'ellipse':
-                        m = OU.create_ellipse_mask(self.xrc, self.yrc, percent=rad_curr/self.xrc)
-                    elif self.mask_case == 'circular':
-                        m = OU.create_circular_mask(self.xrc, self.yrc, radius=rad_curr)
-
+                #Append the mask to the list
                 self.mask_list.append(m.to(self.device))
 
-            #Set the rad for the mask. Important for storing the fft later on.
-            self.rad = self.mask_radiis[0]
+        #Lowpass filter the phase-masks later on
+        self.kernel = self.gaussian_kernel(self.kernel_size, self.sigma).to(self.device)
+        self.kernel_lowpass = self.gaussian_kernel(self.kernel_size, self.sigma/2).to(self.device)
+        self.padding = (self.kernel_size - 1) // 2
 
-        else:
-            self.rad = self.filter_radius
-            if self.mask_case == 'ellipse':
-                m = OU.create_ellipse_mask(self.xr, self.yr, percent=self.rad/self.yr)
 
-            elif self.mask_case == 'circular':
-                m = OU.create_circular_mask(self.xr, self.yr, radius=self.rad)
+    def gaussian_kernel(self, size, sigma):
+        """Function to create a Gaussian kernel."""
 
-            self.mask_list.append(m.to(self.device))
-
+        coords = torch.arange(size) - size // 2
+        x, y = torch.meshgrid(coords, coords, indexing='ij')
+        kernel = torch.exp(-(x**2 + y**2) / (2 * sigma**2))
+        kernel /= kernel.sum()
+        # Add a channel dimension
+        kernel = kernel.view(1, 1, size, size)
+        return kernel
 
 
     def forward(self, holograms):
         """
-        Forward pass of the model.
+        Forward pass of the reconstruction
 
         Parameters:
         - holograms (torch.Tensor): Holograms to reconstruct.
         """
-
-        #Subtract the mean
-        #holograms = holograms - holograms.mean()
 
         #Matrix to store the field in
         reconstructed_fields = torch.zeros(
@@ -213,10 +239,6 @@ class HolographicReconstruction(nn.Module):
             #Inverse 2-dimensional discrete Fourier Transform
             fftImage2 = torch.fft.ifft2(torch.fft.fftshift(fftImage))
 
-            #If we use the previous phase background to correct the phase first.
-            #if self.phase_background is not None:
-            #    reconstructed_fields[i] = reconstructed_fields[i] * torch.exp(-1j * self.phase_background)
-
             #Removes edges in x and y. Some edge effects
             if self.crop > 0:
                 fftImage2 = fftImage2[self.crop:-self.crop, self.crop:-self.crop]
@@ -224,21 +246,36 @@ class HolographicReconstruction(nn.Module):
 
             #Lowpass filtered phase
             if self.lowpass_filtered_phase is not None:
-                phase_img = OU.phase_frequencefilter(reconstructed_fields[i], mask=self.mask_list[1], is_field=True)
+                field = OU.phase_frequencefilter(reconstructed_fields[i], mask=self.mask_list[1], is_field=True, return_phase=False)
             else:
-                phase_img = torch.angle(reconstructed_fields[i])
+                field = reconstructed_fields[i]
+
+            # Apply Gaussian smoothing
+            real_smoothed = F.conv2d(field.real.unsqueeze(0).unsqueeze(0), self.kernel, padding=self.padding)
+            imag_smoothed = F.conv2d(field.imag.unsqueeze(0).unsqueeze(0), self.kernel, padding=self.padding)
+
+            # Combine the smoothed real and imaginary parts
+            phase_img_smooth = (torch.angle(real_smoothed + 1j * imag_smoothed) + 2 * torch.pi) % (2 * torch.pi)
 
             #Correct the field with the phase background
-            reconstructed_fields[i] = reconstructed_fields[i] * torch.exp(-1j * phase_img)
+            reconstructed_fields[i] = reconstructed_fields[i] * torch.exp(-1j * phase_img_smooth)
 
             if self.phase_corrections > 0:
                 for _ in range(self.phase_corrections):
                     if self.lowpass_filtered_phase is not None:
-                        phase_img = OU.phase_frequencefilter(reconstructed_fields[i], mask=self.mask_list[2], is_field=True)
+                        field = OU.phase_frequencefilter(reconstructed_fields[i], mask=self.mask_list[2], is_field=True, return_phase=False)
 
-                        reconstructed_fields[i] = reconstructed_fields[i] * torch.exp(-1j * phase_img)
+                        # Apply Gaussian smoothing
+                        real_smoothed = F.conv2d(field.real.unsqueeze(0).unsqueeze(0), self.kernel_lowpass, padding=self.padding)
+                        imag_smoothed = F.conv2d(field.imag.unsqueeze(0).unsqueeze(0), self.kernel_lowpass, padding=self.padding)
 
-            #Correct reconstructed_fields[i]
+                        # Combine the smoothed real and imaginary parts
+                        phase_img_smooth = (torch.angle(real_smoothed + 1j * imag_smoothed) + 2 * torch.pi) % (2 * torch.pi)
+
+                        #Correct the field with the phase background
+                        reconstructed_fields[i] = reconstructed_fields[i] * torch.exp(-1j * phase_img_smooth)
+
+            #Correct reconstructed_fields[i] with the mean of the phase
             reconstructed_fields[i] = reconstructed_fields[i] * torch.exp(-1j * torch.mean(torch.angle(reconstructed_fields[i])))
 
             #Save the fft instead of the field if fft_save is True 
