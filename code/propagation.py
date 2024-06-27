@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 
 class Propagator():
     def __init__(
@@ -27,7 +28,7 @@ class Propagator():
 
         # Padding to avoid edge effects
         if self.padding is None:
-            self.padding = image_size // 2
+            self.padding = image_size[0] // 2
 
         #Wavevector
         self.k = 2 * torch.pi / self.wavelength * self.ri_medium
@@ -38,15 +39,40 @@ class Propagator():
         if zv is not None:
             self.precalculate_Tz()
 
-    def forward(self, x):
+    def forward(self, x, Z=None):
+        """
+        Propagate the field x
+
+        Input:
+            x : Field to propagate
+            Z : Propagation distance. If None, the default propagation distance is used.
+        Output:
+            Propagated field.
+
+        """
+        #Check if Z is defined. This allows for changing the propagation distance.
+        if Z is not None:
+            self.zv = Z
+            self.precalculate_Tz()
 
         #Check if x is a tensor
         if not torch.is_tensor(x):
             x = torch.tensor(x, dtype=torch.float32, device=self.device)
         
+        #Check if x has two channels
+        if x.shape[-1] == 2:
+            x = x[..., 0] + 1j*x[..., 1]
+
+        #Check so x is complex
+        elif not torch.is_complex(x):
+            x = x.to(torch.complex64)
+
         #Check so zv is defined
         if self.zv is None or isinstance(self.zv, int):
             raise ValueError('zv is not defined. Please define zv to propagate the field.')
+
+        if self.padding > 0:
+            x = F.pad(x, (self.padding, self.padding, self.padding, self.padding))
 
         #Fourier transform of field
         f1 = torch.fft.fft2(x)
@@ -69,7 +95,10 @@ class Propagator():
         Precalculate the Tz matrix for the propagator.
         """
 
-        self.Tz = torch.tensor([self.C*torch.fft.fftshift(torch.exp(self.k * 1j*z*(self.K-1))) for z in self.zv], device=self.device)
+        self.Tz = torch.stack([self.C*torch.fft.fftshift(torch.exp(self.k * 1j*z*(self.K-1))) for z in self.zv])
+        
+        #set nan values to 0
+        self.Tz[torch.isnan(self.Tz)] = 0
 
     def precalculate_KC(self):
         """
@@ -78,13 +107,93 @@ class Propagator():
 
         xr, yr = self.image_size
 
-        x = 2 * torch.pi/(self.pixel_size) * torch.arange(-(xr/2-1/2), (xr/2 + 1/2), 1) / xr
-        y = 2 * torch.pi/(self.pixel_size) * torch.arange(-(yr/2-1/2), (yr/2 + 1/2), 1) / yr
+        if self.padding > 0:
+            xr += 2*self.padding
+            yr += 2*self.padding
 
-        KXk, KYk = torch.meshgrid(x, y, indexing='ij', device=self.device)
+        x = 2 * torch.pi / self.pixel_size * torch.arange(-(xr/2 - 0.5), (xr/2 + 0.5), 1, device=self.device) / xr
+        y = 2 * torch.pi / self.pixel_size * torch.arange(-(yr/2 - 0.5), (yr/2 + 0.5), 1, device=self.device) / yr
 
-        self.K = torch.real(torch.sqrt(torch.tensor(1 -(KXk/self.k)**2 - (KYk/self.k)**2 , dtype = torch.complex64, device=self.device)))
-        self.C = ((KXk/self.k)**2 + (KYk/self.k)**2 < 1).float().to(self.device)
+        KXk, KYk = torch.meshgrid(x, y, indexing='ij')
 
-    def find_focus(self, x):
-        pass
+        #Calculate K matrix. Make it complex for multiplication later
+        self.K = torch.sqrt(1 - (KXk / self.k)**2 - (KYk / self.k)**2).real.to(torch.complex64)
+
+        # Create a circular disk here.
+        self.C = torch.fft.fftshift(((KXk / self.k)**2 + (KYk / self.k)**2 < 1).float())
+
+
+    def find_focus_field(self, x, Z=None, crop_size=None, criterion='max', criterion_pre=None, crit_max=True, return_crit=False):
+
+        #Check if Z is defined. This allows for changing the propagation distance.
+        if Z is not None:
+            self.zv = Z
+            self.precalculate_Tz()
+
+        #Check if x is a tensor
+        if not torch.is_tensor(x):
+            x = torch.tensor(x, dtype=torch.float32, device=self.device)
+        
+        #Check so zv is defined
+        if self.zv is None or isinstance(self.zv, int):
+            raise ValueError('zv is not defined. Please define zv to propagate the field.')
+        
+        #Propagate the field
+        propagations = self.forward(x)
+
+        #Save the propagated fields
+        propagations_pre = propagations.clone()
+
+        #Find the focus field
+        if crop_size is not None:
+            crop_size = crop_size // 2
+            propagations = propagations[:,
+                self.image_size[0]//2-crop_size:self.image_size[0]//2+crop_size, 
+                self.image_size[1]//2-crop_size:self.image_size[1]//2+crop_size
+                ]
+        
+        #Criterion preprocessing
+        if criterion_pre == 'abs':
+            propagations = torch.abs(propagations)
+        elif criterion_pre == 'real':
+            propagations = propagations.real
+        elif criterion_pre == 'imag':
+            propagations = propagations.imag
+        elif criterion_pre == 'phase':
+            propagations = torch.angle(propagations)
+            #Unwrap phase to 0-2pi
+            propagations = torch.remainder(propagations, 2*torch.pi)
+        elif criterion_pre == 'sobel':
+            kernel = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32, device=self.device).view(1, 1, 3, 3)
+            propagations = torch.stack([F.conv2d(torch.abs(prop.unsqueeze(0)), kernel, padding=1) for prop in propagations]).squeeze(1)
+        elif criterion_pre == 'laplace':
+            kernel = torch.tensor([[0, 1, 0], [1, -4, 1], [0, 1, 0]], dtype=torch.float32, device=self.device).view(1, 1, 3, 3)
+            propagations = torch.stack([F.conv2d(torch.abs(prop.unsqueeze(0)), kernel, padding=1) for prop in propagations]).squeeze(1)
+
+        print(propagations.shape)
+
+        #Criterion to find the best focus
+        if criterion == 'max':
+            crit_vals = torch.stack([prop.max() for prop in propagations])
+        elif criterion == 'sum':
+            crit_vals = torch.stack([prop.sum() for prop in propagations])
+        elif criterion == 'mean':
+            crit_vals = propagations.mean(dim=(1,2))
+        elif criterion == 'std':
+            crit_vals = propagations.std(dim=(1,2))
+        elif criterion == 'fftmax' and criterion_pre == 'None':
+            crit_vals = torch.stack([torch.abs(torch.fft.fftshift(torch.fft.fft2(prop))).max() for prop in propagations])
+        else:
+            raise ValueError('Criterion not implemented.')
+
+        if crit_max
+            best_focus = torch.argmax(crit_vals)
+        else:
+            best_focus = torch.argmin(crit_vals)
+
+        best_field = propagations_pre[best_focus]
+
+        if return_crit:
+            return best_field, crit_vals
+        else:
+            return best_field
