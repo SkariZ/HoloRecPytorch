@@ -138,21 +138,45 @@ class HolographicReconstruction(nn.Module):
             (self.first_image) * torch.exp(1j*(self.kx_add_ky)))
             ) * self.mask_list[0]
         
-        # Initialize the PolynomialFitter class. This class is used to fit a polynomial to the phase.
-        #self.PF = PolynomialFitter(order=self.poly_dims, shape=self.first_image.shape, device=self.device)
-        #self.PF = PolynomialFitterV2(input_shape=self.first_image.shape)
-
         # Calculate the first field and phase
         self.first_field = torch.fft.ifft2(torch.fft.fftshift(self.fftIm2)).to(self.device)
         self.first_phase = torch.angle(self.first_field).to(self.device)
 
-        #First phase background
-        #self.phase_background, self.first_phase_sub = self.PF.fit_and_subtract_phase_background_torch(self.first_phase)
-        self.phase_background = torch.mean(self.first_phase)
-        #self.phase_background = self.PF.correct_phase_4order(self.first_phase)
 
-        #First corrected field
-        self.first_field_corrected = torch.exp(-1j * self.phase_background) * self.first_field
+        #Lowpass filtered phase
+        if self.lowpass_filtered_phase is not None and len(self.mask_list) > 1:
+            field = OU.phase_frequencefilter(self.first_field, mask=self.mask_list[1], is_field=True, return_phase=False)
+        else:
+            field = self.first_field
+
+        # Apply Gaussian smoothing
+        real_smoothed = F.conv2d(field.real.unsqueeze(0).unsqueeze(0), self.kernel, padding=self.padding)
+        imag_smoothed = F.conv2d(field.imag.unsqueeze(0).unsqueeze(0), self.kernel, padding=self.padding)
+
+        # Combine the smoothed real and imaginary parts
+        self.phase_img_smooth = (torch.angle(real_smoothed + 1j * imag_smoothed) + 2 * torch.pi) % (2 * torch.pi)
+
+        #Correct the field with the phase background
+        self.first_field_corrected = self.first_field * torch.exp(-1j * self.phase_img_smooth)
+
+        if self.phase_corrections > 0:
+            for _ in range(self.phase_corrections):
+                if self.lowpass_filtered_phase is not None and len(self.mask_list) > 2:
+                    field = OU.phase_frequencefilter(self.first_field_corrected, mask=self.mask_list[2], is_field=True, return_phase=False)
+
+                    # Apply Gaussian smoothing
+                    real_smoothed = F.conv2d(field.real.unsqueeze(0).unsqueeze(0), self.kernel_lowpass, padding=self.padding)
+                    imag_smoothed = F.conv2d(field.imag.unsqueeze(0).unsqueeze(0), self.kernel_lowpass, padding=self.padding)
+
+                    # Combine the smoothed real and imaginary parts
+                    phase_img_smooth = (torch.angle(real_smoothed + 1j * imag_smoothed) + 2 * torch.pi) % (2 * torch.pi)
+
+                    #Correct the field with the phase background
+                    self.first_field_corrected = self.first_field_corrected * torch.exp(-1j * phase_img_smooth)
+
+        #Correct reconstructed_fields[i] with the mean of the phase
+        self.first_field_corrected = self.first_field_corrected * torch.exp(-1j * torch.mean(torch.angle(self.first_field_corrected)))
+
 
     def masks_precalculate(self):
         """
@@ -245,7 +269,7 @@ class HolographicReconstruction(nn.Module):
             reconstructed_fields[i] = fftImage2
 
             #Lowpass filtered phase
-            if self.lowpass_filtered_phase is not None:
+            if self.lowpass_filtered_phase is not None and len(self.mask_list) > 1:
                 field = OU.phase_frequencefilter(reconstructed_fields[i], mask=self.mask_list[1], is_field=True, return_phase=False)
             else:
                 field = reconstructed_fields[i]
@@ -262,7 +286,7 @@ class HolographicReconstruction(nn.Module):
 
             if self.phase_corrections > 0:
                 for _ in range(self.phase_corrections):
-                    if self.lowpass_filtered_phase is not None:
+                    if self.lowpass_filtered_phase is not None and len(self.mask_list) > 2:
                         field = OU.phase_frequencefilter(reconstructed_fields[i], mask=self.mask_list[2], is_field=True, return_phase=False)
 
                         # Apply Gaussian smoothing

@@ -123,7 +123,7 @@ class Propagator():
         self.C = torch.fft.fftshift(((KXk / self.k)**2 + (KYk / self.k)**2 < 1).float())
 
 
-    def find_focus_field(self, x, Z=None, crop_size=None, criterion='max', criterion_pre=None, crit_max=True, return_crit=False):
+    def find_focus_field(self, x, Z=None, crop_size=None, criterion='max', criterion_pre="abs", crit_max=True, return_crit=False, moving_avg=None):
 
         #Check if Z is defined. This allows for changing the propagation distance.
         if Z is not None:
@@ -170,27 +170,32 @@ class Propagator():
             kernel = torch.tensor([[0, 1, 0], [1, -4, 1], [0, 1, 0]], dtype=torch.float32, device=self.device).view(1, 1, 3, 3)
             propagations = torch.stack([F.conv2d(torch.abs(prop.unsqueeze(0)), kernel, padding=1) for prop in propagations]).squeeze(1)
 
-        print(propagations.shape)
-
         #Criterion to find the best focus
         if criterion == 'max':
             crit_vals = torch.stack([prop.max() for prop in propagations])
         elif criterion == 'sum':
             crit_vals = torch.stack([prop.sum() for prop in propagations])
         elif criterion == 'mean':
-            crit_vals = propagations.mean(dim=(1,2))
+            crit_vals = propagations.mean(dim=(1, 2))
         elif criterion == 'std':
-            crit_vals = propagations.std(dim=(1,2))
-        elif criterion == 'fftmax' and criterion_pre == 'None':
+            crit_vals = propagations.std(dim=(1, 2))
+        elif criterion == 'fftmax' and criterion_pre is None:
             crit_vals = torch.stack([torch.abs(torch.fft.fftshift(torch.fft.fft2(prop))).max() for prop in propagations])
         else:
             raise ValueError('Criterion not implemented.')
 
-        if crit_max
+        crit_vals = crit_vals.real
+
+        #Moving average
+        if moving_avg is not None:
+            crit_vals = torch.nn.functional.avg_pool1d(crit_vals.unsqueeze(0), moving_avg, stride=1).squeeze(0)
+
+        if crit_max:
             best_focus = torch.argmax(crit_vals)
         else:
             best_focus = torch.argmin(crit_vals)
-
+    	
+        #Return the best focus field
         best_field = propagations_pre[best_focus]
 
         if return_crit:
