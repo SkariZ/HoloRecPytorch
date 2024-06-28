@@ -23,6 +23,8 @@ class ImageWidget(QWidget):
         self.data = data
         self.is_histogram = is_histogram
         self.title = title
+        self.colorbar = None  # Attribute to store the colorbar
+        self.cmap = 'viridis'
         self.initUI()
     
     def initUI(self):
@@ -33,27 +35,38 @@ class ImageWidget(QWidget):
         layout.addWidget(self.canvas)
         
         self.ax = self.canvas.figure.add_subplot(111)
+
+        self.update_plot()
+            
+        self.ax.set_title(self.title)
+        #self.ax.figure.tight_layout()
+
+    def update_plot(self):
+        # Clear the colorbar if it exists
+        if self.colorbar:
+            self.colorbar.remove()
+            self.colorbar = None
+
+        self.ax.clear()
+
         if self.is_histogram:
             self.ax.hist(self.data, bins=255, color='darkblue', alpha=0.7, density=True)
         else:
-            self.ax.imshow(self.data, cmap='gray')
+            im = self.ax.imshow(self.data, cmap=self.cmap, interpolation='none')
+            self.colorbar = self.ax.figure.colorbar(im, ax=self.ax)
+            #self.ax.axis('off')
 
         self.ax.set_title(self.title)
-        self.ax.axis('off')
+        self.canvas.draw()
 
     def update_data(self, data, is_histogram=False, title=""):
         self.data = data
         self.is_histogram = is_histogram
         self.title = title
-        self.ax.clear()
-        if self.is_histogram:
-            self.ax.hist(self.data, bins=255, color='darkblue', alpha=0.7, density=True)
-        else:
-            self.ax.imshow(self.data)
-            #self.ax.figure.colorbar(self.ax.imshow(self.data), ax=self.ax)
-        self.ax.set_title(self.title)
-        self.ax.axis('off')
-        self.canvas.draw()
+
+        self.update_plot()
+        #self.ax.figure.tight_layout()
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -131,7 +144,7 @@ class MainWindow(QMainWindow):
         self.show()
         
         # Initialize image widgets with titles
-        self.titles = ["Fft centered", "Histogram Hologram", "Phase", "First phase background", "Imaginary part", "Real part"]
+        self.titles = ["Fft centered", "Histogram Hologram", "First phase", "First phase background", "Imaginary part", "Real part"]
         self.image_widgets = []
         for i in range(6):
             if i == 1:
@@ -143,9 +156,10 @@ class MainWindow(QMainWindow):
             self.image_layout.addWidget(image_widget, idx // 2, idx % 2)
 
         # Initialize some variables
-        self.frame = None
+        self.frame = np.zeros([2, 2])
         self.prev_filename = None
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.R = None
 
     def precalculate(self):
         # Retrieve parameter values
@@ -153,6 +167,7 @@ class MainWindow(QMainWindow):
         
         #Transform values to correct type
         param_values['filename'] = param_values['filename']
+        param_values['frame_idx'] = int(param_values['frame_idx'])
         param_values['height'] = int(param_values['height'])
         param_values['width'] = int(param_values['width'])
         param_values['crop'] = int(param_values['crop'])
@@ -162,21 +177,34 @@ class MainWindow(QMainWindow):
         param_values['mask_radiis'] = [int(r) for r in param_values['mask_radiis'].split(',')] if not param_values['mask_radiis'] == 'None' else None
         param_values['mask_case'] = param_values['mask_case']
         param_values['phase_corrections'] = int(param_values['phase_corrections'])
+        param_values['skip_background_correction'] = int(param_values['skip_background_correction'])
         param_values['kernel_size'] = int(param_values['kernel_size'])
         param_values['sigma'] = int(param_values['sigma'])
 
         #Read 1 frame from the video
-        if param_values['filename'] != self.prev_filename and self.frame == None:
-            self.frame = rv.read_video(param_values['filename'], start_frame=0, max_frames=1)[0]
+        if param_values['filename'] != self.prev_filename or self.prev_start_frame != param_values['frame_idx'] or self.frame.shape[0]<param_values['height'] or self.frame.shape[1]<param_values['width']:
+
+            self.frame = rv.read_video(
+                param_values['filename'], 
+                start_frame=param_values['frame_idx'], 
+                max_frames=param_values['frame_idx']+1)[0]
 
             #Check so that the frame is not empty
             if self.frame.size == 0:
                 self.recon_info.setText("No frames in the video")
                 return
+            
+            #Save previous filename so that the frame is not read again if the filename is the same
             self.prev_filename = param_values['filename']
+            self.prev_start_frame = param_values['frame_idx']
         
+        #Check if height and width are the same as the frame size else crop the frame
+        if param_values['height'] < self.frame.shape[0] or param_values['width'] < self.frame.shape[1]:
+            #Crop the frame to the correct size
+            self.frame = self.frame[:param_values['height'], :param_values['width']]
+
         #Perform reconstruction
-        R = rec.HolographicReconstruction(
+        self.R = rec.HolographicReconstruction(
             image_size=(param_values['height'], param_values['width']),
             first_image=self.frame,
             crop=param_values['crop'],
@@ -185,35 +213,42 @@ class MainWindow(QMainWindow):
             mask_radiis=param_values['mask_radiis'],
             mask_case=param_values['mask_case'],
             phase_corrections=param_values['phase_corrections'],
+            skip_background_correction=param_values['skip_background_correction'],
             kernel_size=param_values['kernel_size'],
             sigma=param_values['sigma']
             )
 
         # Perform precalculation
-        R.precalculations()
+        self.R.precalculations()
 
-        self.titles = ["Fft centered", "Histogram Hologram", "Phase", "First phase background", "Imaginary part", "Real part"]
-        
-        # Perform precalculation (dummy data used here for demonstration)
+        xc, yc = self.R.image_size[0]//2, self.R.image_size[1]//2
+
+        #Images to visualize
         images = [
-            torch.log10(R.fftIm2.abs()).cpu().numpy(),
-            R.first_phase.cpu().numpy(),
-            R.phase_img_smooth.squeeze(0).squeeze(0).cpu().numpy(),
-            R.first_field_corrected.squeeze(0).squeeze(0).real.cpu().numpy(),
-            R.first_field_corrected.squeeze(0).squeeze(0).imag.cpu().numpy()
-        ]
-        
+            torch.log10(self.R.fftIm2.abs()).cpu().numpy()[
+                xc - self.R.filter_radius:xc + self.R.filter_radius, yc - self.R.filter_radius:yc + self.R.filter_radius
+                ],
+            self.R.first_phase.cpu().numpy(),
+            self.R.phase_img_smooth.squeeze(0).squeeze(0).cpu().numpy(),
+            self.R.first_field_corrected.squeeze(0).squeeze(0).imag.cpu().numpy(),
+            self.R.first_field_corrected.squeeze(0).squeeze(0).real.cpu().numpy()
+            ]
+
+        #Histogram of the hologram
         histogram_data = self.frame[::4, ::4].flatten()
 
-        # Update images and histogram
-        for idx, image in enumerate(images):
-            if idx==1:
-                self.image_widgets[idx].update_data(histogram_data, is_histogram=True, title=self.titles[idx])
-            else:
-                self.image_widgets[idx].update_data(image, title=self.titles[idx])
+        self.image_widgets[0].update_data(images[0], title=self.titles[0])
+        self.image_widgets[1].update_data(histogram_data, is_histogram=True, title=self.titles[1])
+
+        #Update the rest of the images
+        for idx, image in enumerate(images[1:]):
+            self.image_widgets[idx+2].update_data(image, title=self.titles[idx+2])
+
         
     def reconstruction(self):
         pass
+
+
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)

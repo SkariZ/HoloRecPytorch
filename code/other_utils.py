@@ -97,3 +97,39 @@ def phase_frequencefilter(field, mask, is_field=True, return_phase=True, crop=0)
         return torch.angle(E_field)
     else:
         return E_field
+    
+def phase_corrections(phase, phase_corrections=3):
+    """
+    Corrects the phase by removing the phase jumps.
+
+    Input:
+        phase : phase image
+        phase_corrections : number of phase corrections.
+    Output:
+        phase : corrected phase image.
+    """
+    for i in range(phase_corrections):
+        phase = phase - torch.mean(phase)
+        phase = ndi.median_filter(phase, size=5)
+        phase = phase - torch.mean(phase)
+    return phase
+
+def phase_corrections_derivative(phase, phase_corrections=3):
+    """
+    Corrects the phase by removing the phase jumps.
+
+    Input:
+        phase : phase image
+        phase_corrections : number of phase corrections.
+    Output:
+        phase : corrected phase image.
+    """
+    #Take the derivative of the phase
+    phase = torch.tensor(phase, dtype=torch.float32)
+    phase = phase - torch.mean(phase)
+    phase = torch.cat((phase[1:], phase[-1:])) - phase
+    phase = phase - torch.mean(phase)
+    for i in range(phase_corrections):
+        phase = ndi.median_filter(phase, size=5)
+        phase = phase - torch.mean(phase)
+    return phase

@@ -3,6 +3,7 @@
 # Parameters for the reconstruction
 rec_params = {
     'filename': 'C:/MyFolder/xxx.avi',
+    'frame_idx': 0,
     'height': 1450,
     'width': 1930,
     'crop': 0,
@@ -11,6 +12,7 @@ rec_params = {
     'mask_radiis': None,
     'mask_case': "ellipse",
     'phase_corrections': 3,
+    'skip_background_correction': 0,
     'kernel_size': 27,
     'sigma': 9
     }
@@ -19,7 +21,7 @@ rec_params = {
 rec_params_full = {
     'save_folder': 'C:/myFolder/xxx',
     'n_frames': 100,
-    'n_frames_start': 0,
+    'start_frame': 0,
     'n_frames_step': 1,
     'fft_save': True,
     'recalculate_offset': True,

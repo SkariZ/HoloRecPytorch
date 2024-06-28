@@ -22,6 +22,7 @@ class HolographicReconstruction(nn.Module):
             mask_case="ellipse",
             recalculate_offset=True,
             phase_corrections=3,
+            skip_background_correction=False,
             fft_save=False,
             kernel_size=27,
             sigma=9
@@ -42,6 +43,7 @@ class HolographicReconstruction(nn.Module):
         self.mask_case = mask_case
         self.recalculate_offset = recalculate_offset
         self.phase_corrections = phase_corrections
+        self.skip_background_correction = skip_background_correction
         self.fft_save = fft_save
         self.kernel_size = kernel_size
         self.sigma = sigma
@@ -142,37 +144,40 @@ class HolographicReconstruction(nn.Module):
         self.first_field = torch.fft.ifft2(torch.fft.fftshift(self.fftIm2)).to(self.device)
         self.first_phase = torch.angle(self.first_field).to(self.device)
 
+        if not self.skip_background_correction:
+            #Lowpass filtered phase
+            if self.lowpass_filtered_phase is not None and len(self.mask_list) > 1:
+                field = OU.phase_frequencefilter(self.first_field, mask=self.mask_list[1], is_field=True, return_phase=False)
+            else:
+                field = self.first_field
+            
+            # Apply Gaussian smoothing
+            real_smoothed = F.conv2d(field.real.unsqueeze(0).unsqueeze(0), self.kernel, padding=self.padding)
+            imag_smoothed = F.conv2d(field.imag.unsqueeze(0).unsqueeze(0), self.kernel, padding=self.padding)
 
-        #Lowpass filtered phase
-        if self.lowpass_filtered_phase is not None and len(self.mask_list) > 1:
-            field = OU.phase_frequencefilter(self.first_field, mask=self.mask_list[1], is_field=True, return_phase=False)
+            # Combine the smoothed real and imaginary parts 
+            self.phase_img_smooth = torch.angle(real_smoothed + 1j * imag_smoothed)
+
+            #Correct the field with the phase background
+            self.first_field_corrected = self.first_field * torch.exp(-1j * self.phase_img_smooth)
+
+            if self.phase_corrections > 0:
+                for _ in range(self.phase_corrections):
+                    if self.lowpass_filtered_phase is not None and len(self.mask_list) > 2:
+                        field = OU.phase_frequencefilter(self.first_field_corrected, mask=self.mask_list[2], is_field=True, return_phase=False)
+
+                        # Apply Gaussian smoothing
+                        real_smoothed = F.conv2d(field.real, self.kernel_lowpass, padding=self.padding)
+                        imag_smoothed = F.conv2d(field.imag, self.kernel_lowpass, padding=self.padding)
+
+                        # Combine the smoothed real and imaginary parts
+                        phase_img_smooth = torch.angle(real_smoothed + 1j * imag_smoothed)
+
+                        #Correct the field with the phase background
+                        self.first_field_corrected = self.first_field_corrected * torch.exp(-1j * phase_img_smooth)
         else:
-            field = self.first_field
-
-        # Apply Gaussian smoothing
-        real_smoothed = F.conv2d(field.real.unsqueeze(0).unsqueeze(0), self.kernel, padding=self.padding)
-        imag_smoothed = F.conv2d(field.imag.unsqueeze(0).unsqueeze(0), self.kernel, padding=self.padding)
-
-        # Combine the smoothed real and imaginary parts
-        self.phase_img_smooth = (torch.angle(real_smoothed + 1j * imag_smoothed) + 2 * torch.pi) % (2 * torch.pi)
-
-        #Correct the field with the phase background
-        self.first_field_corrected = self.first_field * torch.exp(-1j * self.phase_img_smooth)
-
-        if self.phase_corrections > 0:
-            for _ in range(self.phase_corrections):
-                if self.lowpass_filtered_phase is not None and len(self.mask_list) > 2:
-                    field = OU.phase_frequencefilter(self.first_field_corrected, mask=self.mask_list[2], is_field=True, return_phase=False)
-
-                    # Apply Gaussian smoothing
-                    real_smoothed = F.conv2d(field.real.unsqueeze(0).unsqueeze(0), self.kernel_lowpass, padding=self.padding)
-                    imag_smoothed = F.conv2d(field.imag.unsqueeze(0).unsqueeze(0), self.kernel_lowpass, padding=self.padding)
-
-                    # Combine the smoothed real and imaginary parts
-                    phase_img_smooth = (torch.angle(real_smoothed + 1j * imag_smoothed) + 2 * torch.pi) % (2 * torch.pi)
-
-                    #Correct the field with the phase background
-                    self.first_field_corrected = self.first_field_corrected * torch.exp(-1j * phase_img_smooth)
+            self.phase_img_smooth = self.first_phase
+            self.first_field_corrected = self.first_field
 
         #Correct reconstructed_fields[i] with the mean of the phase
         self.first_field_corrected = self.first_field_corrected * torch.exp(-1j * torch.mean(torch.angle(self.first_field_corrected)))
@@ -211,7 +216,7 @@ class HolographicReconstruction(nn.Module):
 
         #Lowpass filter the phase-masks later on
         self.kernel = self.gaussian_kernel(self.kernel_size, self.sigma).to(self.device)
-        self.kernel_lowpass = self.gaussian_kernel(self.kernel_size, self.sigma/2).to(self.device)
+        self.kernel_lowpass = self.gaussian_kernel(self.kernel_size, self.sigma*2).to(self.device)
         self.padding = (self.kernel_size - 1) // 2
 
 
@@ -268,36 +273,36 @@ class HolographicReconstruction(nn.Module):
                 fftImage2 = fftImage2[self.crop:-self.crop, self.crop:-self.crop]
             reconstructed_fields[i] = fftImage2
 
-            #Lowpass filtered phase
-            if self.lowpass_filtered_phase is not None and len(self.mask_list) > 1:
-                field = OU.phase_frequencefilter(reconstructed_fields[i], mask=self.mask_list[1], is_field=True, return_phase=False)
-            else:
-                field = reconstructed_fields[i]
+            if not self.skip_background_correction:
+                #Lowpass filtered phase
+                if self.lowpass_filtered_phase and len(self.mask_list) > 1:
+                    field = OU.phase_frequencefilter(reconstructed_fields[i], mask=self.mask_list[1], is_field=True, return_phase=False)
+                else:
+                    field = reconstructed_fields[i]
 
-            # Apply Gaussian smoothing
-            real_smoothed = F.conv2d(field.real.unsqueeze(0).unsqueeze(0), self.kernel, padding=self.padding)
-            imag_smoothed = F.conv2d(field.imag.unsqueeze(0).unsqueeze(0), self.kernel, padding=self.padding)
+                # Apply Gaussian smoothing
+                real_smoothed = F.conv2d(field.real.unsqueeze(0).unsqueeze(0), self.kernel, padding=self.padding)
+                imag_smoothed = F.conv2d(field.imag.unsqueeze(0).unsqueeze(0), self.kernel, padding=self.padding)
 
-            # Combine the smoothed real and imaginary parts
-            phase_img_smooth = (torch.angle(real_smoothed + 1j * imag_smoothed) + 2 * torch.pi) % (2 * torch.pi)
+                # Combine the smoothed real and imaginary parts
+                phase_img_smooth = torch.angle(real_smoothed + 1j * imag_smoothed)
 
-            #Correct the field with the phase background
-            reconstructed_fields[i] = reconstructed_fields[i] * torch.exp(-1j * phase_img_smooth)
+                #Correct the field with the phase background
+                reconstructed_fields[i] = reconstructed_fields[i] * torch.exp(-1j * phase_img_smooth)
 
-            if self.phase_corrections > 0:
-                for _ in range(self.phase_corrections):
-                    if self.lowpass_filtered_phase is not None and len(self.mask_list) > 2:
-                        field = OU.phase_frequencefilter(reconstructed_fields[i], mask=self.mask_list[2], is_field=True, return_phase=False)
+                if self.lowpass_filtered_phase and len(self.mask_list) > 2:
+                    for _ in range(self.phase_corrections):
+                            field = OU.phase_frequencefilter(reconstructed_fields[i], mask=self.mask_list[2], is_field=True, return_phase=False)
 
-                        # Apply Gaussian smoothing
-                        real_smoothed = F.conv2d(field.real.unsqueeze(0).unsqueeze(0), self.kernel_lowpass, padding=self.padding)
-                        imag_smoothed = F.conv2d(field.imag.unsqueeze(0).unsqueeze(0), self.kernel_lowpass, padding=self.padding)
+                            # Apply Gaussian smoothing
+                            real_smoothed = F.conv2d(field.real.unsqueeze(0).unsqueeze(0), self.kernel_lowpass, padding=self.padding)
+                            imag_smoothed = F.conv2d(field.imag.unsqueeze(0).unsqueeze(0), self.kernel_lowpass, padding=self.padding)
 
-                        # Combine the smoothed real and imaginary parts
-                        phase_img_smooth = (torch.angle(real_smoothed + 1j * imag_smoothed) + 2 * torch.pi) % (2 * torch.pi)
+                            # Combine the smoothed real and imaginary parts
+                            phase_img_smooth = torch.angle(real_smoothed + 1j * imag_smoothed)
 
-                        #Correct the field with the phase background
-                        reconstructed_fields[i] = reconstructed_fields[i] * torch.exp(-1j * phase_img_smooth)
+                            #Correct the field with the phase background
+                            reconstructed_fields[i] = reconstructed_fields[i] * torch.exp(-1j * phase_img_smooth)
 
             #Correct reconstructed_fields[i] with the mean of the phase
             reconstructed_fields[i] = reconstructed_fields[i] * torch.exp(-1j * torch.mean(torch.angle(reconstructed_fields[i])))
