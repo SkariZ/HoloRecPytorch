@@ -1,4 +1,6 @@
 import sys
+import os
+import time
 import numpy as np
 import matplotlib.pyplot as plt
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QPushButton, 
@@ -159,7 +161,7 @@ class MainWindow(QMainWindow):
         self.frame = np.zeros([2, 2])
         self.prev_filename = None
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.R = None
+        #self.R = None
 
     def precalculate(self):
         # Retrieve parameter values
@@ -170,7 +172,7 @@ class MainWindow(QMainWindow):
         param_values['frame_idx'] = int(param_values['frame_idx'])
         param_values['height'] = int(param_values['height'])
         param_values['width'] = int(param_values['width'])
-        param_values['crop'] = int(param_values['crop'])
+        #param_values['crop'] = int(param_values['crop'])
         param_values['lowpass_filtered_phase'] = bool(param_values['lowpass_filtered_phase'])
         param_values['filter_radius'] = int(param_values['filter_radius']) if not param_values['filter_radius'] == 'None' else None
         #If mask_radiis is a list of integers, split it by comma and convert to list of integers
@@ -187,7 +189,8 @@ class MainWindow(QMainWindow):
             self.frame = rv.read_video(
                 param_values['filename'], 
                 start_frame=param_values['frame_idx'], 
-                max_frames=param_values['frame_idx']+1)[0]
+                max_frames=param_values['frame_idx']+1
+                )[0]
 
             #Check so that the frame is not empty
             if self.frame.size == 0:
@@ -207,7 +210,7 @@ class MainWindow(QMainWindow):
         self.R = rec.HolographicReconstruction(
             image_size=(param_values['height'], param_values['width']),
             first_image=self.frame,
-            crop=param_values['crop'],
+            #crop=param_values['crop'],
             lowpass_filtered_phase=param_values['lowpass_filtered_phase'],
             filter_radius=param_values['filter_radius'],
             mask_radiis=param_values['mask_radiis'],
@@ -220,6 +223,9 @@ class MainWindow(QMainWindow):
 
         # Perform precalculation
         self.R.precalculations()
+
+        #Change color on the button to show that the precalculation is done
+        self.calc_button.setStyleSheet("background-color: #00FF00")
 
         xc, yc = self.R.image_size[0]//2, self.R.image_size[1]//2
 
@@ -246,7 +252,65 @@ class MainWindow(QMainWindow):
 
         
     def reconstruction(self):
-        pass
+        # Retrieve parameter values
+        param_values = {param: input_field.text() for param, input_field in self.param_inputs.items()}
+
+
+        #Transform values to correct type
+        param_values['save_folder'] = param_values['save_folder']
+        param_values['n_frames'] = int(param_values['n_frames'])
+        param_values['start_frame'] = int(param_values['start_frame'])
+        param_values['n_frames_step'] = int(param_values['n_frames_step'])
+        param_values['fft_save'] = int(param_values['fft_save'])
+        param_values['recalculate_offset'] = int(param_values['recalculate_offset'])
+        param_values['save_movie_gif'] = int(param_values['save_movie_gif'])
+
+        #Create folder for saving the images
+        os.makedirs(f"param_values['save_folder']", exist_ok=True)
+        os.makedirs(f"param_values['save_folder']/field/", exist_ok=True)
+        os.makedirs(f"param_values['save_folder']/images/", exist_ok=True)
+
+        #Check so that the precalculation is done
+        if self.R is None:
+            self.recon_info.setText("No precalculation done")
+            return
+        
+        #Read frames from the video
+        frames = rv.read_video(
+            param_values['filename'], 
+            start_frame=param_values['start_frame'], 
+            max_frames=param_values['n_frames'],
+            step=param_values['n_frames_step']
+            )
+
+        #Check so that the frames are not empty
+        if len(frames) == 0:
+            self.recon_info.setText("No frames in the video")
+            return
+        
+        #Transform frames to tensor and move to device
+        data = torch.tensor(frames).to(self.device)
+
+        #Check so that the frames are the correct size
+        if data.size(1) != self.R.image_size[0] or data.size(2) != self.R.image_size[1]:
+            data = data[:, :self.R.image_size[0], :self.R.image_size[1]]
+            data = data.to(self.device)
+
+        #Perform reconstruction
+        self.R.fft_save = param_values['fft_save']
+        self.R.recalculate_offset = param_values['recalculate_offset']
+
+        #Perform reconstruction
+        start_time = time.time()
+        data = self.R.forward(data)
+        end_time = time.time()
+
+        #Print information about the reconstruction
+        self.recon_info.setText(f"Reconstruction done in {end_time-start_time:.2f} seconds")
+
+        #Save the images
+        if param_values['save_movie_gif']:
+            pass
 
 
 

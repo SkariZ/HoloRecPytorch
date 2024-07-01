@@ -6,8 +6,8 @@ rec_params = {
     'frame_idx': 0,
     'height': 1450,
     'width': 1930,
-    'crop': 0,
-    'lowpass_filtered_phase': None,
+    #'crop': 0,
+    'lowpass_filtered_phase': 0,
     'filter_radius': None,
     'mask_radiis': None,
     'mask_case': "ellipse",
@@ -23,8 +23,8 @@ rec_params_full = {
     'n_frames': 100,
     'start_frame': 0,
     'n_frames_step': 1,
-    'fft_save': True,
-    'recalculate_offset': True,
-    'save_movie_gif': False,
+    'fft_save': 1,
+    'recalculate_offset': 1,
+    'save_movie_gif': 0,
     }
 

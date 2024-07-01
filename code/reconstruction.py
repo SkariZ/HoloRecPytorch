@@ -146,7 +146,7 @@ class HolographicReconstruction(nn.Module):
 
         if not self.skip_background_correction:
             #Lowpass filtered phase
-            if self.lowpass_filtered_phase is not None and len(self.mask_list) > 1:
+            if self.lowpass_filtered_phase and len(self.mask_list) > 1:
                 field = OU.phase_frequencefilter(self.first_field, mask=self.mask_list[1], is_field=True, return_phase=False)
             else:
                 field = self.first_field
@@ -163,25 +163,28 @@ class HolographicReconstruction(nn.Module):
 
             if self.phase_corrections > 0:
                 for _ in range(self.phase_corrections):
-                    if self.lowpass_filtered_phase is not None and len(self.mask_list) > 2:
+                    if self.lowpass_filtered_phase and len(self.mask_list) > 2:
                         field = OU.phase_frequencefilter(self.first_field_corrected, mask=self.mask_list[2], is_field=True, return_phase=False)
 
                         # Apply Gaussian smoothing
                         real_smoothed = F.conv2d(field.real, self.kernel_lowpass, padding=self.padding)
                         imag_smoothed = F.conv2d(field.imag, self.kernel_lowpass, padding=self.padding)
 
-                        # Combine the smoothed real and imaginary parts
+                        #Combine the smoothed real and imaginary parts
                         phase_img_smooth = torch.angle(real_smoothed + 1j * imag_smoothed)
 
                         #Correct the field with the phase background
                         self.first_field_corrected = self.first_field_corrected * torch.exp(-1j * phase_img_smooth)
+
+            #Squeeze the field
+            self.first_field_corrected = self.first_field_corrected.squeeze(0).squeeze(0)
+
         else:
             self.phase_img_smooth = self.first_phase
             self.first_field_corrected = self.first_field
 
         #Correct reconstructed_fields[i] with the mean of the phase
         self.first_field_corrected = self.first_field_corrected * torch.exp(-1j * torch.mean(torch.angle(self.first_field_corrected)))
-
 
     def masks_precalculate(self):
         """
@@ -204,7 +207,7 @@ class HolographicReconstruction(nn.Module):
         self.rad = self.filter_radius
 
         #Lowpass filter the phase-masks
-        if self.mask_radiis is not None:
+        if self.mask_radiis is not None and self.lowpass_filtered_phase:
             for _, rad_curr in enumerate(self.mask_radiis):
                 if self.mask_case == 'ellipse':
                     m = OU.create_ellipse_mask(self.xrc, self.yrc, percent=rad_curr/self.xrc)
@@ -239,6 +242,10 @@ class HolographicReconstruction(nn.Module):
         Parameters:
         - holograms (torch.Tensor): Holograms to reconstruct.
         """
+
+        #Check if holograms need to be cropped
+        if holograms.shape[1] != self.xr or holograms.shape[2] != self.yr:
+            holograms = holograms[:, :self.xr, :self.yr]
 
         #Matrix to store the field in
         reconstructed_fields = torch.zeros(

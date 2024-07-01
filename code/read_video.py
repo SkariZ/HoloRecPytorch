@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 
-def read_video(filename, start_frame=0, max_frames=None):
+def read_video(filename, start_frame=0, max_frames=None, step=1):
     """
     Read a video file and return the frames as a numpy array.
     """
@@ -11,7 +11,7 @@ def read_video(filename, start_frame=0, max_frames=None):
     n_frames = int(video.get(cv2.CAP_PROP_FRAME_COUNT)) # Number of frames
 
     frames = []
-    for i in range(start_frame, n_frames):
+    for i in range(start_frame, n_frames, step):
         ret, frame = video.read()
 
         if not ret:

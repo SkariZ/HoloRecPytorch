@@ -7,28 +7,33 @@ import matplotlib.pyplot as plt
 
 
 class PolynomialFitter:
-    def __init__(
-        self, 
-        order=4,
-        shape=(256, 256),
-        device='cuda'
-        ):
-
+    def __init__(self, order=4, shape=(256, 256), device='cuda'):
         self.device = device
         self.order = order
         self.shape = shape  # Shape of the phase data (replace with your actual shape)
+
+        # Prepare the spatial coordinates
+        self.x, self.y = torch.meshgrid(
+            torch.arange(self.shape[0], dtype=torch.float32, device=self.device),
+            torch.arange(self.shape[1], dtype=torch.float32, device=self.device),
+            indexing='ij'
+        )
+        self.x = (self.x - self.shape[0] // 2) / (self.shape[0] // 2)
+        self.y = (self.y - self.shape[1] // 2) / (self.shape[1] // 2)
+
+        # Prepare the G matrix for polynomial fitting
         self.G = self.prepare_G_matrix()
-        
-    def prepare_G_matrix(self):
+
+        # Coefficients of the polynomial
+        self.coeffs = None
+
+    def prepare_G_matrix_old(self):
         """Prepare the G matrix for polynomial fitting."""
         ncols = (self.order + 1) * (self.order + 2) // 2
         G = torch.zeros((self.shape[0] * self.shape[1], ncols), dtype=torch.float32, device=self.device)
-        
-        x, y = torch.meshgrid(torch.arange(self.shape[0], dtype=torch.float32, device=self.device), 
-                              torch.arange(self.shape[1], dtype=torch.float32, device=self.device), 
-                              indexing='ij')
-        x = x.flatten()
-        y = y.flatten()
+
+        x = self.x.flatten()
+        y = self.y.flatten()
 
         index = 0
         for i in range(self.order + 1):
@@ -37,12 +42,12 @@ class PolynomialFitter:
                     G[:, index] = (x**i) * (y**j)
                     index += 1
         return G
-
-    def polyfit2d_torch(self, x, y, z):
+    
+    def polyfit2d_torch(self, z):
         """Fit a 2D polynomial of given order to the data using PyTorch."""
-        x, y, z = x.flatten(), y.flatten(), z.flatten()
-        coeffs = torch.linalg.lstsq(self.G[:], z.unsqueeze(1)).solution.flatten()
-        return coeffs
+        z = z.flatten().unsqueeze(1)
+        self.coeffs = torch.linalg.lstsq(self.G, z).solution.flatten()
+        return self.coeffs
 
     def polyval2d_torch(self, x, y, coeffs):
         """Evaluate a 2D polynomial of given order with coefficients using PyTorch."""
@@ -55,20 +60,56 @@ class PolynomialFitter:
                 index += 1
         return z
 
-    def fit_background(self, phase_data, poly_background=None):
+    def compute_2d_gradients(self, phase):
+        """Computes the gradients in x and y directions for the phase image."""
+        # Derivative the phase to handle the modulus
+        dx = -torch.pi + (torch.pi + torch.diff(phase, dim=0)) % (2 * torch.pi)
+        dy = -torch.pi + torch.transpose((torch.pi + torch.diff(torch.transpose(phase, 0, 1), dim=0)) % (2 * torch.pi), 0, 1)
+
+        #Add 1st row and column
+        grad_x = torch.zeros_like(phase)
+        grad_x[1:, :] = dx
+        grad_x[0, :] = dx[0, :]
+        grad_y = torch.zeros_like(phase)
+        grad_y[:, 1:] = dy
+        grad_y[:, 0] = dy[:, 0]
+
+        return grad_x, grad_y
+
+    def integrate_2d_gradients(self, grad_x, grad_y):
+        """Integrates 2D gradients to obtain the phase image."""
+        integrated_phase = torch.cumsum(grad_x, dim=1) + torch.cumsum(grad_y, dim=0)
+        return integrated_phase
+
+    def fit_background(self, phase_data, subtract_mean=True, derivate_phase=True, poly_background=None):
         """Fit a polynomial to the phase background and subtract it using PyTorch."""
-        device = phase_data.device
-        x, y = torch.meshgrid(torch.arange(phase_data.size(0), dtype=torch.float32, device=device), 
-                              torch.arange(phase_data.size(1), dtype=torch.float32, device=device), 
-                              indexing='ij')
-        
-        # Fit a 2D polynomial
-        if poly_background is None:
-            coeffs = self.polyfit2d_torch(x, y, phase_data)
-        
-            # Evaluate the polynomial on the grid
-            poly_background = self.polyval2d_torch(x, y, coeffs)
-        
+        # Subtract the mean
+        if subtract_mean:
+            phase_data -= phase_data.mean()
+
+        # Derivate the phase to handle the modulus
+        if derivate_phase:
+            grad_x, grad_y = self.compute_2d_gradients(phase_data)
+            grad_x_flat = grad_x.flatten()
+            grad_y_flat = grad_y.flatten()
+
+            # Fit a 2D polynomial to the gradients
+            coeffs_x = self.polyfit2d_torch(grad_x_flat)
+            coeffs_y = self.polyfit2d_torch(grad_y_flat)
+
+            # Evaluate the polynomial gradients
+            grad_x_background = self.polyval2d_torch(self.x, self.y, coeffs_x)
+            grad_y_background = self.polyval2d_torch(self.x, self.y, coeffs_y)
+
+            # Integrate the gradients to get the polynomial background
+            poly_background = self.integrate_2d_gradients(grad_x_background, grad_y_background)
+        else:
+            if poly_background is None:
+                # Fit a 2D polynomial to the phase data
+                coeffs = self.polyfit2d_torch(phase_data)
+                # Evaluate the polynomial background
+                poly_background = self.polyval2d_torch(self.x, self.y, coeffs)
+
         return poly_background
 
     def generate_phase_pattern(self, num_waves=3, freq_range=(0.025, 0.1), noise_level=0.05):
@@ -89,23 +130,21 @@ class PolynomialFitter:
         phase_data : torch.Tensor
             The generated phase pattern.
         """
-        x, y = torch.meshgrid(
-            torch.arange(self.shape[0], dtype=torch.float32, device=self.device),
-            torch.arange(self.shape[1], dtype=torch.float32, device=self.device),
-            indexing='ij'
-        )
 
-        phase_data = torch.zeros_like(x, device=self.device)
+        phase_data = torch.zeros(self.shape, dtype=torch.float32, device=self.device)
         for _ in range(num_waves):
             freq_x = torch.rand(1).item() * (freq_range[1] - freq_range[0]) + freq_range[0]
             freq_y = torch.rand(1).item() * (freq_range[1] - freq_range[0]) + freq_range[0]
             phase_shift_x = torch.rand(1).item() * 2 * torch.pi
             phase_shift_y = torch.rand(1).item() * 2 * torch.pi
-            phase_data += torch.sin(2 * torch.pi * (freq_x * x + freq_y * y) + phase_shift_x + phase_shift_y)
+            phase_data += torch.sin(2 * torch.pi * (freq_x * self.x + freq_y * self.y) + phase_shift_x + phase_shift_y)
 
         # Add noise
         noise = noise_level * torch.randn_like(phase_data, device=self.device)
         phase_data += noise
+
+        #Scale to -pi to pi
+        phase_data = (phase_data - phase_data.min()) / (phase_data.max() - phase_data.min()) * 2 * torch.pi - torch.pi
 
         return phase_data
 
@@ -114,6 +153,14 @@ class PolynomialFitterV2:
     def __init__(self, shape, device='cuda'):
         self.shape = shape
         self.device = device if device is not None else 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.x, self.y = torch.meshgrid(
+            torch.arange(self.shape[0], dtype=torch.float32, device=self.device),
+            torch.arange(self.shape[1], dtype=torch.float32, device=self.device),
+            indexing='ij'
+        )
+        self.x = (self.x - self.shape[0] // 2) / (self.shape[0] // 2)
+        self.y = (self.y - self.shape[1] // 2) / (self.shape[1] // 2)
+
         self.polynomial = self.get_4th_polynomial().to(self.device)
         self.G_matrix = self.get_G_matrix().to(self.device)
 
@@ -125,26 +172,22 @@ class PolynomialFitterV2:
             Polynomial matrix. 
         """
 
-        X_c, Y_c = torch.meshgrid(torch.arange(self.shape[0], dtype=torch.float32, device=self.device), 
-                                  torch.arange(self.shape[1], dtype=torch.float32, device=self.device), 
-                                  indexing='ij')
-
         # 4th order polynomial.
         polynomial = [
-            X_c**2,
-            X_c * Y_c,
-            Y_c**2,
-            X_c,
-            Y_c,
-            X_c**3,
-            X_c**2 * Y_c,
-            X_c * Y_c**2,
-            Y_c**3,
-            X_c**4,
-            X_c**3 * Y_c,
-            X_c**2 * Y_c**2,
-            X_c * Y_c**3,
-            Y_c**4
+            self.x**2,
+            self.x * self.y,
+            self.y**2,
+            self.x,
+            self.y,
+            self.x**3,
+            self.x**2 * self.y,
+            self.x * self.y**2,
+            self.y**3,
+            self.x**4,
+            self.x**3 * self.y,
+            self.x**2 * self.y**2,
+            self.x * self.y**3,
+            self.y**4
         ]
 
         return torch.stack(polynomial)
@@ -154,13 +197,10 @@ class PolynomialFitterV2:
         Output:
             Matrix to store 4-order polynomial. (Not including constant)
         """
-        X_c, Y_c = torch.meshgrid(torch.arange(self.shape[0], dtype=torch.float32, device=self.device), 
-                                  torch.arange(self.shape[1], dtype=torch.float32, device=self.device), 
-                                  indexing='ij')
 
         # Vectors of equal size. x1 and y1 spatial coordinates
-        x1 = 1 / 2 * ((X_c[1:, 1:] + X_c[:-1, :-1])).flatten()
-        y1 = 1 / 2 * ((Y_c[1:, 1:] + Y_c[:-1, :-1])).flatten()
+        x1 = 1 / 2 * ((self.x[1:, 1:] + self.x[:-1, :-1])).flatten()
+        y1 = 1 / 2 * ((self.y[1:, 1:] + self.y[:-1, :-1])).flatten()
 
         #G = torch.zeros((2 * (xrc - 1) * (yrc - 1), 14), device=self.device)  # Matrix to store 4-order polynomial. (Not including constant)
         G = torch.zeros((2 * (self.shape[0] - 1) * (self.shape[1] - 1), 14), device=self.device)
@@ -209,8 +249,6 @@ class PolynomialFitterV2:
         #Move to device
         An0 = An0.to(self.device)
 
-        yr, xr = An0.shape
-
         An0 = An0 - An0[0, 0]  # Set phase to "0"
 
         # Derivative the phase to handle the modulus
@@ -226,7 +264,7 @@ class PolynomialFitterV2:
         uneven_range = torch.arange(1, G_end + 1, 2, device=self.device)
         even_range = torch.arange(0, G_end, 2, device=self.device)
 
-        dt = torch.zeros(2 * (xr - 1) * (yr - 1), device=self.device)
+        dt = torch.zeros(2 * (An0.shape[0] - 1) * (An0.shape[1] - 1), device=self.device)
         dt[even_range] = dx1
         dt[uneven_range] = dy1
 
@@ -235,12 +273,12 @@ class PolynomialFitterV2:
 
         # Equivalent to R\(R'\(G'*dt))
         b = torch.linalg.solve(R, torch.linalg.solve(R.t(), torch.matmul(self.G_matrix.t(), dt)))
-
+        
         # Phase background is defined by the 4th order polynomial with the fitted parameters.
         phase_background = torch.zeros_like(self.polynomial[0], device=self.device)
         for i, factor in enumerate(self.polynomial):
             phase_background += b[i] * factor
-
+        
         return phase_background
 
 class PhaseFrequencyFilter:
@@ -373,18 +411,29 @@ class FourierPeakFinder:
 class Polynomial2DModel(nn.Module):
     def __init__(self, 
                  degree_x, 
-                 degree_y, 
+                 degree_y,
+                 shape=None, 
                  device='cuda', 
-                 num_epochs=100000, 
-                 loss_tolerance=1e-3, 
-                 lr=0.005,
-                 patience=2500
+                 num_epochs=10000, 
+                 loss_tolerance=5e-3, 
+                 lr=5e-3,
+                 patience=5000
                  ):
         super(Polynomial2DModel, self).__init__()
 
-        self.device = device
         self.degree_x = degree_x
         self.degree_y = degree_y
+        self.device = device
+
+        if shape is not None:
+            self.x, self.y = torch.meshgrid(
+                torch.arange(shape[0], dtype=torch.float32, device=self.device),
+                torch.arange(shape[1], dtype=torch.float32, device=self.device),
+                indexing='ij'
+            )
+            self.x = (self.x - shape[0] // 2) / (shape[0] // 2)
+            self.y = (self.y - shape[1] // 2) / (shape[1] // 2)
+
         self.num_epochs = num_epochs
         self.loss_tolerance = loss_tolerance
 
@@ -395,14 +444,18 @@ class Polynomial2DModel(nn.Module):
 
         # Optimizer and loss function
         self.optimizer = torch.optim.Adam(self.parameters(), lr=lr)
-        self.criterion = nn.L1Loss()
+        self.criterion = nn.MSELoss()
         self.learning_rate_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             self.optimizer, mode='min', factor=0.75, patience=patience // 2
             )
         self.patience = patience
 
-    def forward(self, x, y):
-        out = torch.zeros_like(x).to(self.device)
+    def forward(self, x=None, y=None):
+
+        if x is None or y is None:
+            x, y = self.x, self.y
+        
+        out = torch.zeros_like(x, device=self.device)
         idx = 0
         for i in range(self.degree_x + 1):
             for j in range(self.degree_y + 1):
@@ -410,11 +463,13 @@ class Polynomial2DModel(nn.Module):
                 idx += 1
         return out
 
-    def fit(self, x, y, z, n_init=10):
-        x, y, z = x.flatten(), y.flatten(), z.flatten()
-        x = torch.tensor(x, dtype=torch.float32).unsqueeze(1).to(self.device)
-        y = torch.tensor(y, dtype=torch.float32).unsqueeze(1).to(self.device)
-        z = torch.tensor(z, dtype=torch.float32).unsqueeze(1).to(self.device)
+    def fit(self, z, x=None, y=None, n_init=3):
+
+        if x is None or y is None:
+            x, y = self.x, self.y
+
+        x, y, z = x.flatten().unsqueeze(1), y.flatten().unsqueeze(1), z.flatten().unsqueeze(1)
+        z = z.clone().detach().to(self.device)
 
         print(f'Fitting a {self.degree_x}x{self.degree_y} polynomial to the data...')
 
@@ -426,7 +481,7 @@ class Polynomial2DModel(nn.Module):
             for _ in range(n_init):
                 for param in self.parameters():
                     param.data = torch.randn(1).to(self.device)
-                for _ in range(50):
+                for _ in range(10):
                     self.optimizer.zero_grad()
                     outputs = self(x, y)
                     loss = self.criterion(outputs, z)
@@ -443,14 +498,12 @@ class Polynomial2DModel(nn.Module):
         # Train the model
         patience_counter = 0
         for epoch in range(self.num_epochs):
-            #self.train()
             outputs = self(x, y)
             loss = self.criterion(outputs, z)
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
             self.learning_rate_scheduler.step(loss)
-
 
             if loss.item() < best_loss - self.loss_tolerance:
                 best_loss = loss.item()
@@ -462,7 +515,7 @@ class Polynomial2DModel(nn.Module):
                 print(f'Early stopping at epoch {epoch + 1} with best loss: {best_loss:.4f}')
                 break
 
-            if (epoch + 1) % 1000 == 0:
+            if (epoch + 1) % 100 == 0:
                 print(f'Epoch [{epoch + 1}/{self.num_epochs}], Loss: {loss.item():.4f}')
 
 class Polynomial2DModelNN(nn.Module):
