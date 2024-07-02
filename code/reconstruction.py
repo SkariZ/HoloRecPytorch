@@ -65,6 +65,7 @@ class HolographicReconstruction(nn.Module):
             "mask_case": self.mask_case,
             "recalculate_offset": self.recalculate_offset,
             "phase_corrections": self.phase_corrections,
+            "skip_background_correction": self.skip_background_correction,
             "fft_save": self.fft_save,
             "kernel_size": self.kernel_size,
             "sigma": self.sigma
@@ -314,9 +315,18 @@ class HolographicReconstruction(nn.Module):
             #Correct reconstructed_fields[i] with the mean of the phase
             reconstructed_fields[i] = reconstructed_fields[i] * torch.exp(-1j * torch.mean(torch.angle(reconstructed_fields[i])))
 
-            #Save the fft instead of the field if fft_save is True 
-            if self.fft_save:
-                reconstructed_fields = FL.field_to_vec_multi(reconstructed_fields, self.rad, mask=self.mask_list[0])
+        #Save the fft instead of the field if fft_save is True 
+        if self.fft_save:
+            reconstructed_fields = FL.field_to_vec_multi(reconstructed_fields, self.rad, mask=self.mask_list[0])
 
         return reconstructed_fields
+    
+    def load_fft(self, ffts):
+        """
+        Load ffts and reconstruct the fields.
+
+        Parameters:
+        - ffts (torch.Tensor): FFTs to reconstruct.
+        """
+        return FL.vec_to_field_multi(ffts, self.rad, shape=(self.xrc, self.yrc), mask=self.mask_list[0])
 

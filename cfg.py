@@ -14,7 +14,8 @@ rec_params = {
     'phase_corrections': 3,
     'skip_background_correction': 0,
     'kernel_size': 27,
-    'sigma': 9
+    'sigma': 9,
+    'colormap': 'viridis',
     }
 
 # Parameters for full field reconstruction
@@ -26,5 +27,6 @@ rec_params_full = {
     'fft_save': 1,
     'recalculate_offset': 1,
     'save_movie_gif': 0,
+    'colormap': 'viridis',
     }
 

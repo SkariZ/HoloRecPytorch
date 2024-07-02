@@ -18,6 +18,7 @@ import cfg as CFG
 sys.path.append('code')
 import read_video as rv
 import reconstruction as rec
+import fft_loader as fl
 
 class ImageWidget(QWidget):
     def __init__(self, data, is_histogram=False, title=""):
@@ -26,7 +27,7 @@ class ImageWidget(QWidget):
         self.is_histogram = is_histogram
         self.title = title
         self.colorbar = None  # Attribute to store the colorbar
-        self.cmap = 'viridis'
+        self.cmap = 'gray'
         self.initUI()
     
     def initUI(self):
@@ -52,9 +53,9 @@ class ImageWidget(QWidget):
         self.ax.clear()
 
         if self.is_histogram:
-            self.ax.hist(self.data, bins=255, color='darkblue', alpha=0.7, density=True)
+            self.ax.hist(self.data, bins=255, color='darkblue', alpha=0.7)
         else:
-            im = self.ax.imshow(self.data, cmap=self.cmap, interpolation='none')
+            im = self.ax.imshow(self.data, cmap=self.cmap, interpolation='none', aspect='auto')
             self.colorbar = self.ax.figure.colorbar(im, ax=self.ax)
             #self.ax.axis('off')
 
@@ -109,6 +110,10 @@ class MainWindow(QMainWindow):
         self.calc_button.clicked.connect(self.precalculate)
         param_layout.addWidget(self.calc_button)
         #main_layout.addLayout(param_layout)
+        #Create a box that prints some text once the precalculation is done with time and other information
+        self.precalc_info = QLabel("Press Button to precalculate")
+        self.precalc_info.setAlignment(Qt.AlignCenter)
+        param_layout.addWidget(self.precalc_info)
         #Make the button come right under the input fields
         param_layout.addStretch(1)
 
@@ -133,7 +138,7 @@ class MainWindow(QMainWindow):
         #main_layout.addLayout(param_layout)
 
         # Create a box that prints some text once the reconstruction is done with time and other information
-        self.recon_info = QLabel("Reconstruction information")
+        self.recon_info = QLabel("Press Button to reconstruct the hologram")
         self.recon_info.setAlignment(Qt.AlignCenter)
         param_layout.addWidget(self.recon_info)
         main_layout.addLayout(param_layout)
@@ -161,7 +166,8 @@ class MainWindow(QMainWindow):
         self.frame = np.zeros([2, 2])
         self.prev_filename = None
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        #self.R = None
+        self.prev_start_frame = None
+        self.R = None
 
     def precalculate(self):
         # Retrieve parameter values
@@ -173,7 +179,7 @@ class MainWindow(QMainWindow):
         param_values['height'] = int(param_values['height'])
         param_values['width'] = int(param_values['width'])
         #param_values['crop'] = int(param_values['crop'])
-        param_values['lowpass_filtered_phase'] = bool(param_values['lowpass_filtered_phase'])
+        param_values['lowpass_filtered_phase'] = int(param_values['lowpass_filtered_phase'])
         param_values['filter_radius'] = int(param_values['filter_radius']) if not param_values['filter_radius'] == 'None' else None
         #If mask_radiis is a list of integers, split it by comma and convert to list of integers
         param_values['mask_radiis'] = [int(r) for r in param_values['mask_radiis'].split(',')] if not param_values['mask_radiis'] == 'None' else None
@@ -222,10 +228,14 @@ class MainWindow(QMainWindow):
             )
 
         # Perform precalculation
+        start_time = time.time()
         self.R.precalculations()
+        end_time = time.time()
 
         #Change color on the button to show that the precalculation is done
         self.calc_button.setStyleSheet("background-color: #00FF00")
+        #Print information about the precalculation
+        self.precalc_info.setText(f"Precalculation done in {end_time-start_time:.2f} seconds")
 
         xc, yc = self.R.image_size[0]//2, self.R.image_size[1]//2
 
@@ -241,7 +251,9 @@ class MainWindow(QMainWindow):
             ]
 
         #Histogram of the hologram
-        histogram_data = self.frame[::4, ::4].flatten()
+        histogram_data = self.frame.flatten()
+        #10000 random numbers from histogram_data
+        histogram_data = np.random.choice(histogram_data, 25000)
 
         self.image_widgets[0].update_data(images[0], title=self.titles[0])
         self.image_widgets[1].update_data(histogram_data, is_histogram=True, title=self.titles[1])
@@ -264,11 +276,12 @@ class MainWindow(QMainWindow):
         param_values['fft_save'] = int(param_values['fft_save'])
         param_values['recalculate_offset'] = int(param_values['recalculate_offset'])
         param_values['save_movie_gif'] = int(param_values['save_movie_gif'])
+        param_values['colormap'] = param_values['colormap']
 
         #Create folder for saving the images
-        os.makedirs(f"param_values['save_folder']", exist_ok=True)
-        os.makedirs(f"param_values['save_folder']/field/", exist_ok=True)
-        os.makedirs(f"param_values['save_folder']/images/", exist_ok=True)
+        os.makedirs(f"{param_values['save_folder']}", exist_ok=True)
+        os.makedirs(f"{param_values['save_folder']}/field/", exist_ok=True)
+        os.makedirs(f"{param_values['save_folder']}/images/", exist_ok=True)
 
         #Check so that the precalculation is done
         if self.R is None:
@@ -306,9 +319,26 @@ class MainWindow(QMainWindow):
         end_time = time.time()
 
         #Print information about the reconstruction
-        self.recon_info.setText(f"Reconstruction done in {end_time-start_time:.2f} seconds")
+        self.recon_info.setText(f"Reconstruction done in {end_time-start_time:.2f} seconds \n Time per frame: {(end_time-start_time)/param_values['n_frames']:.2f} seconds \n saving to {param_values['save_folder']}")
 
-        #Save the images
+        #Save the fields
+        np.save(f"{param_values['save_folder']}/field/field.npy", data.cpu().numpy())
+
+        #Save images of the fields
+        if self.R.fft_save:
+            data1 = self.R.load_fft(data[:1])
+            data1 = data1.cpu().numpy()
+        else:
+            data1 = data[:1].cpu().numpy()
+
+        #Save images
+        plt.imsave(f"{param_values['save_folder']}/images/abs.png", np.abs(data1.squeeze()), cmap=param_values['colormap'])
+        plt.imsave(f"{param_values['save_folder']}/images/real.png", np.real(data1.squeeze()), cmap=param_values['colormap'])
+        plt.imsave(f"{param_values['save_folder']}/images/imag.png", np.imag(data1.squeeze()), cmap=param_values['colormap'])
+        plt.imsave(f"{param_values['save_folder']}/images/phase.png", np.angle(data1.squeeze()), cmap=param_values['colormap'])
+        plt.imsave(f"{param_values['save_folder']}/images/fft.png", np.log10(np.abs(np.fft.fftshift(np.fft.fft2(data1.squeeze())))), cmap=param_values['colormap'])
+
+
         if param_values['save_movie_gif']:
             pass
 
