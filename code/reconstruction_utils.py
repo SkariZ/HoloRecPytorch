@@ -158,8 +158,8 @@ class PolynomialFitterV2:
             torch.arange(self.shape[1], dtype=torch.float32, device=self.device),
             indexing='ij'
         )
-        self.x = (self.x - self.shape[0] // 2) / (self.shape[0] // 2)
-        self.y = (self.y - self.shape[1] // 2) / (self.shape[1] // 2)
+        self.x = (self.x-1/2 - self.shape[0] // 2+1/2) #/ (self.shape[0] // 2)
+        self.y = (self.y-1/2 - self.shape[1] // 2+1/2) #/ (self.shape[1] // 2)
 
         self.polynomial = self.get_4th_polynomial().to(self.device)
         self.G_matrix = self.get_G_matrix().to(self.device)
@@ -270,14 +270,19 @@ class PolynomialFitterV2:
 
         # Here the coefficients to the polynomial are calculated. Note that np.linalg.lstsq(b,B)[0] is equivalent to \ in MATLAB              
         R = torch.linalg.cholesky(torch.matmul(torch.transpose(self.G_matrix, 0, 1), self.G_matrix))
+        R = torch.transpose(R, 0, 1)
+        Rt = torch.transpose(R, 0, 1)
 
         # Equivalent to R\(R'\(G'*dt))
-        b = torch.linalg.solve(R, torch.linalg.solve(R.t(), torch.matmul(self.G_matrix.t(), dt)))
-        
+        b = torch.linalg.solve(R,
+                               torch.linalg.solve(
+                                   Rt, torch.matmul(self.G_matrix.t(), dt))
+                                )
+        self.b=b
         # Phase background is defined by the 4th order polynomial with the fitted parameters.
         phase_background = torch.zeros_like(self.polynomial[0], device=self.device)
         for i, factor in enumerate(self.polynomial):
-            phase_background += b[i] * factor
+            phase_background = phase_background + b[i] * factor
         
         return phase_background
 

@@ -6,7 +6,7 @@ rec_params = {
     'frame_idx': 0,
     'height': 1450,
     'width': 1930,
-    #'crop': 0,
+    'corner': 1,
     'lowpass_filtered_phase': 0,
     'filter_radius': None,
     'mask_radiis': None,
@@ -15,7 +15,6 @@ rec_params = {
     'skip_background_correction': 0,
     'kernel_size': 27,
     'sigma': 9,
-    'colormap': 'viridis',
     }
 
 # Parameters for full field reconstruction
@@ -28,5 +27,6 @@ rec_params_full = {
     'recalculate_offset': 1,
     'save_movie_gif': 0,
     'colormap': 'viridis',
+    'cornerf': 1,
     }
 

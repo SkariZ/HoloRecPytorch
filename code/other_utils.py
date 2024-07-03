@@ -18,6 +18,7 @@ def create_circular_mask(h, w, center=None, radius=None):
         Circular mask.
 
     """
+    
     if center is None:  # use the middle of the image
         center = (int(h/2), int(w/2))
         
@@ -45,6 +46,7 @@ def create_ellipse_mask(h, w, center=None, radius_h=None, radius_w=None, percent
     Output:
         Ellipsoid mask.
     """
+
     if center is None:
         center_w, center_h = int(w/2), int(h/2)
     else:
@@ -80,6 +82,7 @@ def phase_frequencefilter(field, mask, is_field=True, return_phase=True, crop=0)
     Output:
         phase_img : phase of optical field.
     """
+
     if is_field:
         freq = torch.fft.fftshift(torch.fft.fft2(field))
     else:
@@ -97,7 +100,47 @@ def phase_frequencefilter(field, mask, is_field=True, return_phase=True, crop=0)
         return torch.angle(E_field)
     else:
         return E_field
-    
+
+
+def correctfield(field, n_iter=5):
+    """
+    Correct field
+    """
+
+    if field.dtype == torch.float32:
+        field = field.to(torch.complex64)
+
+    f_new = field.clone()
+
+    # Normalize with mean of absolute value.
+    f_new = f_new / torch.mean(torch.abs(f_new))
+
+    for _ in range(n_iter):
+        f_new = f_new * torch.exp(-1j * torch.median(torch.angle(f_new)))
+
+    return f_new
+
+
+def correctfield_sign(field, pos=True):
+    """
+    Force mean of the real part to be positive.
+    """
+
+    if field.dtype == torch.float32:
+        field = field.to(torch.complex64)
+
+    if pos:
+        for i, f in enumerate(field):
+            if torch.mean(torch.real(f)) < 0:
+                field[i] = -f
+    else:
+        for i, f in enumerate(field):
+            if torch.mean(torch.real(f)) > 0:
+                field[i] = -f
+                
+    return field
+
+
 def phase_corrections(phase, phase_corrections=3):
     """
     Corrects the phase by removing the phase jumps.
@@ -108,11 +151,13 @@ def phase_corrections(phase, phase_corrections=3):
     Output:
         phase : corrected phase image.
     """
+
     for i in range(phase_corrections):
         phase = phase - torch.mean(phase)
         phase = ndi.median_filter(phase, size=5)
         phase = phase - torch.mean(phase)
     return phase
+
 
 def phase_corrections_derivative(phase, phase_corrections=3):
     """
@@ -124,6 +169,7 @@ def phase_corrections_derivative(phase, phase_corrections=3):
     Output:
         phase : corrected phase image.
     """
+
     #Take the derivative of the phase
     phase = torch.tensor(phase, dtype=torch.float32)
     phase = phase - torch.mean(phase)

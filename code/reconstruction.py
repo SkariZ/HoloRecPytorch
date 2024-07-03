@@ -5,7 +5,7 @@ import torch.nn.functional as F
 import other_utils as OU
 import fft_loader as FL
 
-from reconstruction_utils import FourierPeakFinder #PolynomialFitter, PolynomialFitterV2, PhaseFrequencyFilter,
+from reconstruction_utils import FourierPeakFinder, PolynomialFitterV2 #PolynomialFitter, PhaseFrequencyFilter,
 
 
 class HolographicReconstruction(nn.Module):
@@ -24,6 +24,7 @@ class HolographicReconstruction(nn.Module):
             phase_corrections=3,
             skip_background_correction=False,
             fft_save=False,
+            correct_field=True,
             kernel_size=27,
             sigma=9
             ):
@@ -45,6 +46,7 @@ class HolographicReconstruction(nn.Module):
         self.phase_corrections = phase_corrections
         self.skip_background_correction = skip_background_correction
         self.fft_save = fft_save
+        self.correct_field = correct_field
         self.kernel_size = kernel_size
         self.sigma = sigma
 
@@ -67,6 +69,7 @@ class HolographicReconstruction(nn.Module):
             "phase_corrections": self.phase_corrections,
             "skip_background_correction": self.skip_background_correction,
             "fft_save": self.fft_save,
+            "correct_field": self.correct_field,
             "kernel_size": self.kernel_size,
             "sigma": self.sigma
             }
@@ -131,6 +134,11 @@ class HolographicReconstruction(nn.Module):
             self.Y
             )
 
+        self.PF = PolynomialFitterV2(
+            shape=(self.xrc, self.yrc), 
+            device=self.device
+            )
+
         #Find the peak coordinates
         self.kx_add_ky, self.dist_peak = self.FPF.find_peak_coordinates(self.first_image)
         self.kx_add_ky.to(self.device)
@@ -152,12 +160,14 @@ class HolographicReconstruction(nn.Module):
             else:
                 field = self.first_field
             
+            self.phase_img_smooth = self.PF.correct_phase_4order(torch.angle(field))
+
             # Apply Gaussian smoothing
-            real_smoothed = F.conv2d(field.real.unsqueeze(0).unsqueeze(0), self.kernel, padding=self.padding)
-            imag_smoothed = F.conv2d(field.imag.unsqueeze(0).unsqueeze(0), self.kernel, padding=self.padding)
+            #real_smoothed = F.conv2d(field.real.unsqueeze(0).unsqueeze(0), self.kernel, padding=self.padding)
+            #imag_smoothed = F.conv2d(field.imag.unsqueeze(0).unsqueeze(0), self.kernel, padding=self.padding)
 
             # Combine the smoothed real and imaginary parts 
-            self.phase_img_smooth = torch.angle(real_smoothed + 1j * imag_smoothed)
+            #self.phase_img_smooth = torch.angle(real_smoothed + 1j * imag_smoothed)
 
             #Correct the field with the phase background
             self.first_field_corrected = self.first_field * torch.exp(-1j * self.phase_img_smooth)
@@ -168,11 +178,13 @@ class HolographicReconstruction(nn.Module):
                         field = OU.phase_frequencefilter(self.first_field_corrected, mask=self.mask_list[2], is_field=True, return_phase=False)
 
                         # Apply Gaussian smoothing
-                        real_smoothed = F.conv2d(field.real, self.kernel_lowpass, padding=self.padding)
-                        imag_smoothed = F.conv2d(field.imag, self.kernel_lowpass, padding=self.padding)
+                        #real_smoothed = F.conv2d(field.real, self.kernel_lowpass, padding=self.padding)
+                        #imag_smoothed = F.conv2d(field.imag, self.kernel_lowpass, padding=self.padding)
 
                         #Combine the smoothed real and imaginary parts
-                        phase_img_smooth = torch.angle(real_smoothed + 1j * imag_smoothed)
+                        #phase_img_smooth = torch.angle(real_smoothed + 1j * imag_smoothed)
+
+                        phase_img_smooth = self.PF.correct_phase_4order(torch.angle(field))
 
                         #Correct the field with the phase background
                         self.first_field_corrected = self.first_field_corrected * torch.exp(-1j * phase_img_smooth)
@@ -289,11 +301,12 @@ class HolographicReconstruction(nn.Module):
                     field = reconstructed_fields[i]
 
                 # Apply Gaussian smoothing
-                real_smoothed = F.conv2d(field.real.unsqueeze(0).unsqueeze(0), self.kernel, padding=self.padding)
-                imag_smoothed = F.conv2d(field.imag.unsqueeze(0).unsqueeze(0), self.kernel, padding=self.padding)
+                #real_smoothed = F.conv2d(field.real.unsqueeze(0).unsqueeze(0), self.kernel, padding=self.padding)
+                #imag_smoothed = F.conv2d(field.imag.unsqueeze(0).unsqueeze(0), self.kernel, padding=self.padding)
 
                 # Combine the smoothed real and imaginary parts
-                phase_img_smooth = torch.angle(real_smoothed + 1j * imag_smoothed)
+                #phase_img_smooth = torch.angle(real_smoothed + 1j * imag_smoothed)
+                phase_img_smooth = self.PF.correct_phase_4order(torch.angle(field))
 
                 #Correct the field with the phase background
                 reconstructed_fields[i] = reconstructed_fields[i] * torch.exp(-1j * phase_img_smooth)
@@ -303,11 +316,12 @@ class HolographicReconstruction(nn.Module):
                             field = OU.phase_frequencefilter(reconstructed_fields[i], mask=self.mask_list[2], is_field=True, return_phase=False)
 
                             # Apply Gaussian smoothing
-                            real_smoothed = F.conv2d(field.real.unsqueeze(0).unsqueeze(0), self.kernel_lowpass, padding=self.padding)
-                            imag_smoothed = F.conv2d(field.imag.unsqueeze(0).unsqueeze(0), self.kernel_lowpass, padding=self.padding)
+                            #real_smoothed = F.conv2d(field.real.unsqueeze(0).unsqueeze(0), self.kernel_lowpass, padding=self.padding)
+                            #imag_smoothed = F.conv2d(field.imag.unsqueeze(0).unsqueeze(0), self.kernel_lowpass, padding=self.padding)
 
                             # Combine the smoothed real and imaginary parts
-                            phase_img_smooth = torch.angle(real_smoothed + 1j * imag_smoothed)
+                            #phase_img_smooth = torch.angle(real_smoothed + 1j * imag_smoothed)
+                            phase_img_smooth = self.PF.correct_phase_4order(torch.angle(field))
 
                             #Correct the field with the phase background
                             reconstructed_fields[i] = reconstructed_fields[i] * torch.exp(-1j * phase_img_smooth)
@@ -315,6 +329,10 @@ class HolographicReconstruction(nn.Module):
             #Correct reconstructed_fields[i] with the mean of the phase
             reconstructed_fields[i] = reconstructed_fields[i] * torch.exp(-1j * torch.mean(torch.angle(reconstructed_fields[i])))
 
+        if self.correct_field:
+            for i in range(reconstructed_fields.shape[0]):
+                reconstructed_fields[i] = OU.correctfield(reconstructed_fields[i], n_iter=3)
+        
         #Save the fft instead of the field if fft_save is True 
         if self.fft_save:
             reconstructed_fields = FL.field_to_vec_multi(reconstructed_fields, self.rad, mask=self.mask_list[0])

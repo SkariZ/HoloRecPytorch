@@ -18,7 +18,7 @@ import cfg as CFG
 sys.path.append('code')
 import read_video as rv
 import reconstruction as rec
-import fft_loader as fl
+import image_utils as iu
 
 class ImageWidget(QWidget):
     def __init__(self, data, is_histogram=False, title=""):
@@ -178,7 +178,7 @@ class MainWindow(QMainWindow):
         param_values['frame_idx'] = int(param_values['frame_idx'])
         param_values['height'] = int(param_values['height'])
         param_values['width'] = int(param_values['width'])
-        #param_values['crop'] = int(param_values['crop'])
+        param_values['corner'] = int(param_values['corner'])
         param_values['lowpass_filtered_phase'] = int(param_values['lowpass_filtered_phase'])
         param_values['filter_radius'] = int(param_values['filter_radius']) if not param_values['filter_radius'] == 'None' else None
         #If mask_radiis is a list of integers, split it by comma and convert to list of integers
@@ -190,27 +190,22 @@ class MainWindow(QMainWindow):
         param_values['sigma'] = int(param_values['sigma'])
 
         #Read 1 frame from the video
-        if param_values['filename'] != self.prev_filename or self.prev_start_frame != param_values['frame_idx'] or self.frame.shape[0]<param_values['height'] or self.frame.shape[1]<param_values['width']:
+        self.frame = rv.read_video(
+            param_values['filename'], 
+            start_frame=param_values['frame_idx'], 
+            max_frames=param_values['frame_idx']+1
+            )[0]
 
-            self.frame = rv.read_video(
-                param_values['filename'], 
-                start_frame=param_values['frame_idx'], 
-                max_frames=param_values['frame_idx']+1
-                )[0]
-
-            #Check so that the frame is not empty
-            if self.frame.size == 0:
-                self.recon_info.setText("No frames in the video")
-                return
-            
-            #Save previous filename so that the frame is not read again if the filename is the same
-            self.prev_filename = param_values['filename']
-            self.prev_start_frame = param_values['frame_idx']
+        #Check so that the frame is not empty
+        if self.frame.size == 0:
+            self.recon_info.setText("No frames in the video")
+            return
         
         #Check if height and width are the same as the frame size else crop the frame
-        if param_values['height'] < self.frame.shape[0] or param_values['width'] < self.frame.shape[1]:
+        if param_values['height'] <= self.frame.shape[0] and param_values['width'] <= self.frame.shape[1]:
             #Crop the frame to the correct size
-            self.frame = self.frame[:param_values['height'], :param_values['width']]
+            self.frame = iu.cropping_image(self.frame, h=param_values['height'], w=param_values['width'], corner=param_values['corner'])
+
 
         #Perform reconstruction
         self.R = rec.HolographicReconstruction(
@@ -277,11 +272,13 @@ class MainWindow(QMainWindow):
         param_values['recalculate_offset'] = int(param_values['recalculate_offset'])
         param_values['save_movie_gif'] = int(param_values['save_movie_gif'])
         param_values['colormap'] = param_values['colormap']
+        param_values['cornerf'] = int(param_values['cornerf'])
 
         #Create folder for saving the images
         os.makedirs(f"{param_values['save_folder']}", exist_ok=True)
         os.makedirs(f"{param_values['save_folder']}/field/", exist_ok=True)
         os.makedirs(f"{param_values['save_folder']}/images/", exist_ok=True)
+        os.makedirs(f"{param_values['save_folder']}/frames/", exist_ok=True)
 
         #Check so that the precalculation is done
         if self.R is None:
@@ -301,6 +298,9 @@ class MainWindow(QMainWindow):
             self.recon_info.setText("No frames in the video")
             return
         
+        #Crop the frames to the correct size
+        frames = np.stack([iu.cropping_image(f, h=self.R.image_size[0], w=self.R.image_size[1], corner=param_values['cornerf']) for f in frames])
+
         #Transform frames to tensor and move to device
         data = torch.tensor(frames).to(self.device)
 
@@ -317,6 +317,9 @@ class MainWindow(QMainWindow):
         start_time = time.time()
         data = self.R.forward(data)
         end_time = time.time()
+
+        #Change color on the button to show that the reconstruction is done
+        self.recon_button.setStyleSheet("background-color: #00FF00")
 
         #Print information about the reconstruction
         self.recon_info.setText(f"Reconstruction done in {end_time-start_time:.2f} seconds \n Time per frame: {(end_time-start_time)/param_values['n_frames']:.2f} seconds \n saving to {param_values['save_folder']}")
@@ -340,8 +343,18 @@ class MainWindow(QMainWindow):
 
 
         if param_values['save_movie_gif']:
-            pass
+            print("Saving movie...")
+            if self.R.fft_save:
+                field = self.R.load_fft(data).cpu().numpy()
+            else:
+                field = data.cpu().numpy()
 
+            #Save the frames
+            for i, f in enumerate(field):
+                iu.save_frame(f.imag, f"{param_values['save_folder']}/frames/", name = f"imag_{i}", annotate=True, annotatename=f"Frame {i}", dpi=300)
+
+            #Save the gif
+            iu.gif(f"{param_values['save_folder']}/frames/", f"{param_values['save_folder']}/images/imag_gif.gif", duration=100, loop=0)
 
 
 if __name__ == '__main__':
