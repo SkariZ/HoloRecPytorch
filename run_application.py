@@ -186,6 +186,8 @@ class MainWindow(QMainWindow):
         param_values['mask_case'] = param_values['mask_case']
         param_values['phase_corrections'] = int(param_values['phase_corrections'])
         param_values['skip_background_correction'] = int(param_values['skip_background_correction'])
+        param_values['correct_field'] = int(param_values['correct_field'])
+        param_values['lowpass_kernel_end'] = int(param_values['lowpass_kernel_end'])
         param_values['kernel_size'] = int(param_values['kernel_size'])
         param_values['sigma'] = int(param_values['sigma'])
 
@@ -218,6 +220,8 @@ class MainWindow(QMainWindow):
             mask_case=param_values['mask_case'],
             phase_corrections=param_values['phase_corrections'],
             skip_background_correction=param_values['skip_background_correction'],
+            correct_field=param_values['correct_field'],
+            lowpass_kernel_end=param_values['lowpass_kernel_end'],
             kernel_size=param_values['kernel_size'],
             sigma=param_values['sigma']
             )
@@ -351,7 +355,7 @@ class MainWindow(QMainWindow):
 
             #Save the frames
             for i, f in enumerate(field):
-                iu.save_frame(f.imag, f"{param_values['save_folder']}/frames/", name = f"imag_{i}", annotate=True, annotatename=f"Frame {i}", dpi=300)
+                iu.save_frame(f.imag, f"{param_values['save_folder']}/frames/", name=f"imag_{i}", annotate=True, annotatename=f"Frame {i}", dpi=300)
 
             #Save the gif
             iu.gif(f"{param_values['save_folder']}/frames/", f"{param_values['save_folder']}/images/imag_gif.gif", duration=100, loop=0)

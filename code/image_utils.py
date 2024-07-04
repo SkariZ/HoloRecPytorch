@@ -15,7 +15,6 @@ def natural_keys(text):
 
 #Save frame in native resolution. Can change colormap if necessary.
 def save_frame(frame, folder, name, cmap='gray', annotate='False', annotatename='', dpi=300):
-    plt.imsave(f"{folder}/{name}.png", frame, cmap=cmap)
 
     if annotate:
         fig, ax = plt.subplots()
@@ -32,15 +31,18 @@ def save_frame(frame, folder, name, cmap='gray', annotate='False', annotatename=
         ax.axis('off')
         fig.savefig(f"{folder}/{name}.png", bbox_inches="tight", pad_inches=0, dpi=dpi)
         plt.close(fig)
+    
+    else:
+        plt.imsave(f"{folder}/{name}.png", frame, cmap=cmap, dpi=dpi)
 
 
 def cropping_image(image, h, w, corner):
     """
     Crops the image
     """
-    print(corner)
+    
     hi, wi = image.shape[:2]
-    if hi<=h or wi<=w:
+    if hi<h or wi<w:
         raise Exception("Cropping size larger than actual image size.")
 
     if corner == 1:

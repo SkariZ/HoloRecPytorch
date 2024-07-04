@@ -13,6 +13,8 @@ rec_params = {
     'mask_case': "ellipse",
     'phase_corrections': 3,
     'skip_background_correction': 0,
+    'correct_field': 1,
+    'lowpass_kernel_end': 0,
     'kernel_size': 27,
     'sigma': 9,
     }

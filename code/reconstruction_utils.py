@@ -604,3 +604,38 @@ class Polynomial2DModelNN(nn.Module):
 
             if (epoch + 1) % 1000 == 0:
                 print(f'Epoch [{epoch + 1}/{self.num_epochs}], Loss: {loss.item():.4f}')
+
+def phaseunwrap_skimage(field, norm_phase_after=False):
+    """
+    Unwrap the phase of the field using skimage.
+
+    Parameters:
+    field : torch.Tensor
+        Complex field whose phase needs to be unwrapped.
+    norm_phase_after : bool, optional
+        If True, normalize the phase to be between -pi and pi after unwrapping.
+
+    Returns:
+    torch.Tensor
+        The complex field with the unwrapped (and optionally normalized) phase.
+    """
+    from skimage.restoration import unwrap_phase
+
+    # Check if the field is complex
+    if torch.is_complex(field):
+        phase = torch.angle(field)
+    else:
+        raise ValueError("The field is not complex")
+
+    # Unwrap the phase using skimage's unwrap_phase function
+    phase_unwrapped = unwrap_phase(phase.cpu().numpy())
+    phase_unwrapped = torch.from_numpy(phase_unwrapped).to(field.device)
+
+    # Normalize the phase to be between -pi and pi after unwrapping if requested
+    if norm_phase_after:
+        phase_unwrapped = phase_unwrapped - phase_unwrapped.min()
+        phase_unwrapped = phase_unwrapped / phase_unwrapped.max()
+        phase_unwrapped = phase_unwrapped * 2 * torch.pi - torch.pi
+
+    # Return the corrected field
+    return torch.abs(field) * torch.exp(1j * phase_unwrapped)
