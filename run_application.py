@@ -267,8 +267,8 @@ class MainWindow(QMainWindow):
         # Retrieve parameter values
         param_values = {param: input_field.text() for param, input_field in self.param_inputs.items()}
 
-
-        #Transform values to correct type
+        
+        # Transform values to correct type
         param_values['save_folder'] = param_values['save_folder']
         param_values['n_frames'] = int(param_values['n_frames'])
         param_values['start_frame'] = int(param_values['start_frame'])
@@ -279,18 +279,18 @@ class MainWindow(QMainWindow):
         param_values['colormap'] = param_values['colormap']
         param_values['cornerf'] = int(param_values['cornerf'])
 
-        #Create folder for saving the images
+        # Create folder for saving the images
         os.makedirs(f"{param_values['save_folder']}", exist_ok=True)
         os.makedirs(f"{param_values['save_folder']}/field/", exist_ok=True)
         os.makedirs(f"{param_values['save_folder']}/images/", exist_ok=True)
         os.makedirs(f"{param_values['save_folder']}/frames/", exist_ok=True)
 
-        #Check so that the precalculation is done
+        # Check so that the precalculation is done
         if self.R is None:
             self.recon_info.setText("No precalculation done")
             return
         
-        #Read frames from the video
+        # Read frames from the video
         frames = rv.read_video(
             param_values['filename'], 
             start_frame=param_values['start_frame'], 
@@ -298,7 +298,7 @@ class MainWindow(QMainWindow):
             step=param_values['n_frames_step']
             )
 
-        #Check so that the frames are not empty
+        # Check so that the frames are not empty
         if len(frames) == 0:
             self.recon_info.setText("No frames in the video")
             return
@@ -360,6 +360,12 @@ class MainWindow(QMainWindow):
 
             #Save the gif
             iu.gif(f"{param_values['save_folder']}/frames/", f"{param_values['save_folder']}/images/imag_gif.gif", duration=100, loop=0)
+
+        # Save the parameters used for the reconstruction to a text file
+        with open(f"{param_values['save_folder']}/parameters.txt", "w") as f:
+            for k, v in param_values.items():
+                f.write(f"{k}: {v}\n")
+            f.write(f"Time per frame: {(end_time-start_time)/param_values['n_frames']:.2f} seconds")
 
 
 if __name__ == '__main__':
