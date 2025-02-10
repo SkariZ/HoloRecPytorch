@@ -169,6 +169,7 @@ class MainWindow(QMainWindow):
         self.prev_start_frame = None
         self.R = None
 
+
     def precalculate(self):
         # Retrieve parameter values
         param_values = {param: input_field.text() for param, input_field in self.param_inputs.items()}
