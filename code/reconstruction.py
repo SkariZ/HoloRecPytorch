@@ -200,7 +200,7 @@ class HolographicReconstruction(nn.Module):
     def masks_precalculate(self):
         """
         Precalculate the masks for the reconstruction. The first mask is for the area of which we extract information from the hologram.
-        Is set in the filter_radius. The 2, 3 are for lowpass filtering the phase.
+        If set in the filter_radius. The 2, 3 are for lowpass filtering the phase.
         The 2, 3 are for lowpass filtering the phase.
         """
 

@@ -66,7 +66,7 @@ class PolynomialFitter:
         dx = -torch.pi + (torch.pi + torch.diff(phase, dim=0)) % (2 * torch.pi)
         dy = -torch.pi + torch.transpose((torch.pi + torch.diff(torch.transpose(phase, 0, 1), dim=0)) % (2 * torch.pi), 0, 1)
 
-        #Add 1st row and column
+        # Add 1st row and column
         grad_x = torch.zeros_like(phase)
         grad_x[1:, :] = dx
         grad_x[0, :] = dx[0, :]

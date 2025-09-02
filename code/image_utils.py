@@ -83,7 +83,7 @@ def save_video(folder, savefolder, fps=12, quality=10):
         writer.append_data(im)
     writer.close()
     
-def gif(folder, savefolder, duration=100, loop=0):
+def gif_old(folder, savefolder, duration=100, loop=0):
     """
     Save frames to a gif. 
     
@@ -106,3 +106,37 @@ def gif(folder, savefolder, duration=100, loop=0):
         frames.append(new_frame)
     # Save into a GIF file that loops forever
     frames[0].save(savefolder, format='GIF', append_images=frames[1:] , save_all=True, duration=duration, loop=loop)
+
+def gif(folder, savefolder, duration=100, loop=0):
+    """
+    Save frames to a gif. 
+    folder = Directory containing .png files.
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        print("Package PIL not installed. Please install with 'pip install Pillow'.")
+        return
+
+    imgs = glob.glob(folder + "/*.png")
+    imgs.sort(key=natural_keys)
+
+    # Load first frame and quantize once
+    first = Image.open(imgs[0]).convert("P", palette=Image.ADAPTIVE)
+    palette = first.getpalette()
+    frames = [first]
+
+    # Reuse the same palette for all other frames (much faster!)
+    for file_name in imgs[1:]:
+        frame = Image.open(file_name).convert("P")
+        frame.putpalette(palette)
+        frames.append(frame)
+
+    frames[0].save(
+        savefolder,
+        format='GIF',
+        append_images=frames[1:],
+        save_all=True,
+        duration=duration,
+        loop=loop
+    )
