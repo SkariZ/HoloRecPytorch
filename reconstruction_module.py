@@ -3,12 +3,14 @@ import sys
 import os
 import time
 import numpy as np
+import glob
 import torch
 import matplotlib.pyplot as plt
+from scipy.ndimage import gaussian_filter1d
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
-                             QLineEdit, QPushButton, QLabel, QSizePolicy, QFileDialog, QDialog, QTextEdit)
+                             QLineEdit, QPushButton, QLabel, QSizePolicy, QFileDialog,
+                             QDialog, QTextEdit, QSlider)
 from PyQt5.QtCore import Qt
 
 import cfg as CFG
@@ -17,6 +19,7 @@ sys.path.append('code')
 import read_video as rv
 import reconstruction as rec
 import image_utils as iu
+import propagation as prop
 
 class ImageWidget(QWidget):
     def __init__(self, data, is_histogram=False, title=""):
@@ -43,7 +46,12 @@ class ImageWidget(QWidget):
             self.colorbar = None
         self.ax.clear()
         if self.is_histogram:
-            self.ax.hist(self.data, bins=255, color='darkblue', alpha=0.7)
+            hist, bins = np.histogram(self.data, bins=np.arange(257))  # 0-255
+            self.ax.bar(bins[:-1], hist, width=1, color='darkblue', alpha=0.6, align="center")
+            smoothed = gaussian_filter1d(hist, sigma=2)
+            self.ax.plot(bins[:-1], smoothed, color="red", linewidth=2, label="Smoothed")
+            self.ax.set_xlim(0, 255)
+            self.ax.set_ylabel("Frequency")
         else:
             im = self.ax.imshow(self.data, cmap=self.cmap, interpolation='none', aspect='auto')
             self.colorbar = self.ax.figure.colorbar(im, ax=self.ax)
@@ -63,6 +71,10 @@ class ReconstructionModule(QWidget):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.R = None
         self.frame = np.zeros([2, 2])
+        self.z_stack = None
+        self.current_z_idx = 0
+        self.focus_idx = None
+        self.focus_um = None
         self.prev_filename = None
         self.prev_start_frame = None
         self.initUI()
@@ -76,14 +88,19 @@ class ReconstructionModule(QWidget):
         param_layout = QVBoxLayout()
         self.param_inputs = {}
 
-        # First form layout
+        # Help button
+        self.help_button = QPushButton("Help")
+        self.help_button.clicked.connect(self.show_help)
+        param_layout.addWidget(self.help_button)
+
+        # First form layout (Precalculate)
         form_layout = QFormLayout()
         for param, default in CFG.rec_params.items():
             inp = QLineEdit(str(default))
             inp.setMaximumWidth(400)
             self.param_inputs[param] = inp
 
-            # Special case for filename
+            # Filename browse
             if param == 'filename':
                 hbox = QHBoxLayout()
                 hbox.addWidget(inp)
@@ -107,16 +124,66 @@ class ReconstructionModule(QWidget):
         self.precalc_info = QLabel("Press Button to precalculate")
         self.precalc_info.setAlignment(Qt.AlignCenter)
         param_layout.addWidget(self.precalc_info)
-        param_layout.addStretch(1)
 
-        # Second form layout
+        # ---------------- Z-propagation Section ----------------
+        z_layout = QFormLayout()
+        self.z_min_input = QLineEdit()
+        self.z_max_input = QLineEdit()
+        self.z_steps_input = QLineEdit()
+        self.wavelength_input = QLineEdit()
+
+        self.z_min_input.setText(str(CFG.zprop_defaults["z_min"]))
+        self.z_max_input.setText(str(CFG.zprop_defaults["z_max"]))
+        self.z_steps_input.setText(str(CFG.zprop_defaults["z_steps"]))
+        self.wavelength_input.setText(str(CFG.zprop_defaults["wavelength"]))
+
+        z_layout.addRow("Z min (μm):", self.z_min_input)
+        z_layout.addRow("Z max (μm):", self.z_max_input)
+        z_layout.addRow("Steps:", self.z_steps_input)
+        z_layout.addRow("Wavelength (μm):", self.wavelength_input)
+
+        # Compute z-stack button
+        self.z_compute_btn = QPushButton("Compute Z-Propagation")
+        self.z_compute_btn.setStyleSheet("background-color: #FFA500")
+        self.z_compute_btn.clicked.connect(self.compute_z_stack)
+        z_layout.addRow(self.z_compute_btn)
+
+        # Feedback label for z-propagation
+        self.z_info = QLabel("Press button to compute z-propagation")
+        self.z_info.setAlignment(Qt.AlignCenter)
+        z_layout.addRow(self.z_info)
+
+        # Slider
+        self.z_slider = QSlider(Qt.Horizontal)
+        self.z_slider.setMinimum(0)
+        self.z_slider.setMaximum(0)
+        self.z_slider.setValue(0)
+        self.z_slider.setEnabled(False)
+        self.z_slider.valueChanged.connect(self.update_z_view)
+        z_layout.addRow("Focus:", self.z_slider)
+
+        # Set focus input/button
+        focus_hbox = QHBoxLayout()
+        self.focus_input = QLineEdit("0")
+        self.focus_btn = QPushButton("Set Focus")
+        self.focus_btn.clicked.connect(self.set_focus)
+        focus_hbox.addWidget(self.focus_input)
+        focus_hbox.addWidget(self.focus_btn)
+        z_layout.addRow(focus_hbox)
+
+        # Add spacing around Z-propagation box
+        param_layout.addSpacing(20)  # space between Precalculate and Z-propagation
+        param_layout.addLayout(z_layout)
+        param_layout.addSpacing(20)  # space between Z-propagation and Reconstruction
+
+        # Second form layout (Reconstruction)
         form_layout2 = QFormLayout()
         for param, default in CFG.rec_params_full.items():
             inp = QLineEdit(str(default))
             inp.setMaximumWidth(400)
             self.param_inputs[param] = inp
 
-            # Special case for save_folder
+            # Save folder browse
             if param == 'save_folder':
                 hbox = QHBoxLayout()
                 hbox.addWidget(inp)
@@ -129,7 +196,6 @@ class ReconstructionModule(QWidget):
 
         param_layout.addLayout(form_layout2)
 
-
         # Reconstruction button
         self.recon_button = QPushButton('Reconstruction')
         self.recon_button.setStyleSheet("background-color: #FF5733")
@@ -138,15 +204,11 @@ class ReconstructionModule(QWidget):
         self.recon_button.clicked.connect(self.reconstruction)
         param_layout.addWidget(self.recon_button)
 
-        # Help button
-        self.help_button = QPushButton("Help")
-        self.help_button.clicked.connect(self.show_help)
-        param_layout.addWidget(self.help_button)
-
         self.recon_info = QLabel("Press Button to reconstruct the hologram")
         self.recon_info.setAlignment(Qt.AlignCenter)
         param_layout.addWidget(self.recon_info)
 
+        param_layout.addStretch(1)
         main_layout.addLayout(param_layout)
 
         # ---------------- Image Section ----------------
@@ -184,7 +246,6 @@ class ReconstructionModule(QWidget):
         layout = QVBoxLayout()
         help_text = QTextEdit()
         help_text.setReadOnly(True)
-        # Add explanations for each parameter
         help_content = ""
         for param, desc in CFG.rec_param_descriptions.items():
             help_content += f"{param}: {desc}\n\n"
@@ -266,13 +327,9 @@ class ReconstructionModule(QWidget):
             #Print information about the precalculation
             self.precalc_info.setText(f"Precalculation done in {end_time-start_time:.2f} seconds")
 
-            xc, yc = self.R.image_size[0]//2, self.R.image_size[1]//2
-
-            #Images to visualize
+            #Images to visualize: FFT, Phase, and Field
             images = [
-                torch.log10(self.R.fftIm2.abs()).cpu().numpy()[
-                    xc - self.R.filter_radius:xc + self.R.filter_radius, yc - self.R.filter_radius:yc + self.R.filter_radius
-                    ],
+                torch.log10(self.R.fftIm2.abs()).cpu().numpy(),
                 self.R.first_phase.cpu().numpy(),
                 self.R.phase_img_smooth.squeeze(0).squeeze(0).cpu().numpy(),
                 self.R.first_field_corrected.squeeze(0).squeeze(0).imag.cpu().numpy(),
@@ -281,8 +338,9 @@ class ReconstructionModule(QWidget):
 
             #Histogram of the hologram
             histogram_data = self.frame.flatten()
+
             #10000 random numbers from histogram_data
-            histogram_data = np.random.choice(histogram_data, 25000)
+            histogram_data = np.random.choice(histogram_data, 25000) if histogram_data.size > 25000 else histogram_data
 
             self.image_widgets[0].update_data(images[0], title=self.titles[0])
             self.image_widgets[1].update_data(histogram_data, is_histogram=True, title=self.titles[1])
@@ -291,7 +349,113 @@ class ReconstructionModule(QWidget):
             for idx, image in enumerate(images[1:]):
                 self.image_widgets[idx+2].update_data(image, title=self.titles[idx+2])
 
-        
+            # After precalc, enable z-slider and reset stack
+            self.z_stack = None
+            self.z_slider.setEnabled(False)
+            self.current_z_idx = 0
+
+    def compute_z_stack(self):
+        try:
+            # Read z-propagation parameters
+            z_min = float(self.z_min_input.text())   # umeters
+            z_max = float(self.z_max_input.text())   # umeters
+            n_steps = int(self.z_steps_input.text())
+
+            # Generate z values
+            self.z_values = np.linspace(z_min, z_max, n_steps)
+
+            # Make sure 0 is included and sorted.
+            if 0 not in self.z_values:
+                self.z_values = np.insert(self.z_values, 0, 0)
+                self.z_values.sort()
+                self.z_values = np.unique(self.z_values)
+
+
+            # Wavelength (µm → m)
+            wavelength = float(self.wavelength_input.text())
+
+            # Field from reconstruction
+            field = self.R.first_field_corrected.squeeze()
+            h, w = field.shape
+
+            # Init propagator
+            self.propagator = prop.Propagator(
+                image_size=(h, w),
+                wavelength=wavelength,
+                padding=256
+            )
+
+            # Compute stack
+            self.propagated_stack = self.propagator.forward(field, self.z_values)
+
+            # Enable slider
+            self.z_slider.setEnabled(True)
+            self.z_slider.setMaximum(n_steps)
+            self.z_slider.setValue(0)
+
+            # Feedback text in propagation box
+            self.z_info.setText(
+                f"Z-propagation done: {n_steps} steps\nrange {z_min} – {z_max} um"
+            )
+
+            # Show first slice
+            self.update_z_view()
+
+        except Exception as e:
+            self.z_info.setText(f"Error in z-propagation: {e}")
+
+    def update_z_view(self):
+        if self.propagated_stack is None:
+            return
+
+        idx = self.z_slider.value()
+        self.current_focus_idx = idx
+        # Show both index and µm value
+        self.focus_input.setText(f"{idx}  ({self.z_values[idx]:.2f} µm)")
+
+        # Safely extract real/imag
+        current_field = self.propagated_stack[idx]
+        if isinstance(current_field, torch.Tensor):
+            current_field = current_field.cpu().numpy()
+
+        self.image_widgets[4].update_data(current_field.imag, title="Imaginary part")
+        self.image_widgets[5].update_data(current_field.real, title="Real part")
+
+    def set_focus(self):
+        if self.propagated_stack is None:
+            return
+        try:
+            text = self.focus_input.text().strip()
+            if text == "":
+                self.z_info.setText("Empty focus input")
+                return
+
+            # Try interpreting as index first
+            if text.isdigit():
+                idx = int(text)
+                idx = max(0, min(idx, self.z_slider.maximum()))
+            else:
+                # Interpret as z-value in µm
+                z_um = float(text)
+                # Find the closest index
+                idx = int(np.argmin(np.abs(self.z_values - z_um)))
+
+            # Update slider
+            self.z_slider.setValue(idx)
+
+            # Store focus
+            self.focus_idx = idx
+            self.focus_um = self.z_values[idx]
+
+            # Update display
+            self.focus_input.setText(f"{self.focus_um:.3f}")
+            self.z_info.setText(f"Focus set to index {idx} (z = {self.focus_um:.3f} µm)")
+
+        except ValueError:
+            self.z_info.setText("Invalid focus input")
+
+
+
     def reconstruction(self):
         # Retrieve parameter values
         param_values = {param: input_field.text() for param, input_field in self.param_inputs.items()}
@@ -355,9 +519,24 @@ class ReconstructionModule(QWidget):
         # Compute
         data = self.R.forward(data)
 
+        # Refocuse the fields 
+        if self.focus_idx is not None:
+
+            # If fft-stored its needed to go back to image plane.
+            if self.R.fft_save:
+                data = self.R.load_fft(data)
+
+            # Propagate the fields
+            data = self.propagator.forward_fields(data, Z=self.focus_um)
+
+            # Save the propagated fields 
+            if self.R.fft_save:
+                data = self.R.save_fft(data)
+
         if torch.cuda.is_available():
             torch.cuda.synchronize()  # wait for GPU to finish
         end_time = time.time()
+
 
         #Change color on the button to show that the reconstruction is done
         self.recon_button.setStyleSheet("background-color: #00FF00")
@@ -392,13 +571,29 @@ class ReconstructionModule(QWidget):
 
             #Save the frames
             for i, f in enumerate(field):
-                iu.save_frame(f.imag, f"{param_values['save_folder']}/frames/", name=f"imag_{i}", annotate=True, annotatename=f"Frame {i}", dpi=300)
+                iu.save_frame(f.imag, f"{param_values['save_folder']}/frames/", name=f"imag_{i}", annotate=True, annotatename=f"Frame {i}", dpi=250)
 
-            #Save the gif
-            iu.gif(f"{param_values['save_folder']}/frames/", f"{param_values['save_folder']}/images/imag_gif.gif", duration=100, loop=0)
+            #Save the movie
+            iu.save_gif(f"{param_values['save_folder']}/frames/", f"{param_values['save_folder']}/images/imag_gif.gif", duration=100, loop=0)
+
+            # Delete all the image files
+            for f in glob.glob(f"{param_values['save_folder']}/frames/*.png"):
+                os.remove(f)
 
         # Save the parameters used for the reconstruction to a text file
         with open(f"{param_values['save_folder']}/parameters.txt", "w") as f:
             for k, v in param_values.items():
                 f.write(f"{k}: {v}\n")
-            f.write(f"Time per frame: {(end_time-start_time)/data.shape[0]:.2f} seconds")
+            f.write(f"Time per frame: {(end_time-start_time)/data.shape[0]:.2f} seconds\n")
+
+            # Save the focus parameters if they exist
+            if self.focus_um is not None:
+                f.write(f"Focus (µm): {self.focus_um}\n")
+
+        # Save the R.rad and the R.mask_list[0] to a file for fft-loading
+        with open(f"{param_values['save_folder']}/fft_loading.txt", "w") as f:
+            f.write(f"radius: {self.R.rad}\n")
+            f.write(f"mask: {self.R.mask_list[0]}\n")
+            f.write(f"xsize: {self.R.xrc}\n")
+            f.write(f"ysize: {self.R.yrc}\n")
+

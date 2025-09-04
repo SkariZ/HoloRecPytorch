@@ -329,7 +329,7 @@ class HolographicReconstruction(nn.Module):
         
         #Save the fft instead of the field if fft_save is True 
         if self.fft_save:
-            reconstructed_fields = FL.field_to_vec_multi(reconstructed_fields, self.rad, mask=self.mask_list[0])
+            reconstructed_fields = self.save_fft(reconstructed_fields)
 
         return reconstructed_fields
     
@@ -341,4 +341,13 @@ class HolographicReconstruction(nn.Module):
         - ffts (torch.Tensor): FFTs to reconstruct.
         """
         return FL.vec_to_field_multi(ffts, self.rad, shape=(self.xrc, self.yrc), mask=self.mask_list[0])
+    
+    def save_fft(self, fields):
+        """
+        Save the FFTs of the fields.
 
+        Parameters:
+        - fields (torch.Tensor): Fields to compute FFTs for.
+        """
+        ffts = FL.field_to_vec_multi(fields, self.rad, mask=self.mask_list[0])
+        return ffts

@@ -10,7 +10,6 @@ from PyQt5.QtCore import Qt
 # Import your modules
 from reconstruction_module import ReconstructionModule
 from particle_tracking_module import ParticleTrackingModule
-from zpropagation_module import ZPropagationModule
 
 
 class WelcomeWidget(QWidget):
@@ -27,7 +26,11 @@ class WelcomeWidget(QWidget):
             img_label.setAlignment(Qt.AlignCenter)
             layout.addWidget(img_label)
 
-        msg = QLabel("Welcome to the Holography Toolbox\n\nSelect a module above to begin your analysis \n\n\nWritten by Fredrik Skärberg @ Department of Physics, Gothenburg University")
+        msg = QLabel(
+            "Welcome to the Holography Toolbox\n\n"
+            "Select a module above to begin your analysis \n\n\n"
+            "Written by Fredrik Skärberg @ Department of Physics, Gothenburg University"
+        )
         msg.setAlignment(Qt.AlignCenter)
         msg.setStyleSheet("font-size: 16px; color: #333;")
         layout.addWidget(msg)
@@ -48,27 +51,25 @@ class MainApp(QMainWindow):
 
         self.btn_recon = QPushButton("Reconstruction")
         self.btn_track = QPushButton("Particle Tracking")
-        self.btn_zprop = QPushButton("Z-Propagation")
 
         # Create top-level horizontal layout
         nav_bar = QHBoxLayout()
         nav_bar.setAlignment(Qt.AlignCenter)
 
         # Configure buttons first
-        for btn in (self.btn_recon, self.btn_track, self.btn_zprop):
-            btn.setMinimumHeight(60)          # taller buttons
-            btn.setMinimumWidth(200)          # wider buttons
+        for btn in (self.btn_recon, self.btn_track):
+            btn.setMinimumHeight(60)
+            btn.setMinimumWidth(200)
             btn.setCheckable(True)
             btn.setStyleSheet(self._style_inactive())
-            
+
             font = btn.font()
             font.setPointSize(12)
             btn.setFont(font)
 
-        # Then add buttons to the layout (only once)
+        # Then add buttons to the layout
         nav_bar.addWidget(self.btn_recon)
         nav_bar.addWidget(self.btn_track)
-        nav_bar.addWidget(self.btn_zprop)
 
         # Add the nav_bar to the main layout
         main_layout.addLayout(nav_bar)
@@ -81,38 +82,59 @@ class MainApp(QMainWindow):
         self.welcome = WelcomeWidget(asset_path="Utils/yeast_template.png")
         self.stack.addWidget(self.welcome)
 
-        # Create module instances
-        self.recon_module = ReconstructionModule()        # fully working module
-        self.tracking_module = ParticleTrackingModule()   # dummy GUI for tracking
-        self.zprop_module = ZPropagationModule()          # dummy GUI for z-propagation
-
-        # Add modules to stack
-        self.stack.addWidget(self.recon_module)
-        self.stack.addWidget(self.tracking_module)
-        self.stack.addWidget(self.zprop_module)
+        # Placeholders for modules (created when needed)
+        self.recon_module = None
+        self.tracking_module = None
 
         # Connect buttons to toggle modules
-        self.btn_recon.clicked.connect(lambda: self._toggle_module(self.recon_module, self.btn_recon))
-        self.btn_track.clicked.connect(lambda: self._toggle_module(self.tracking_module, self.btn_track))
-        self.btn_zprop.clicked.connect(lambda: self._toggle_module(self.zprop_module, self.btn_zprop))
+        self.btn_recon.clicked.connect(lambda: self._toggle_module("recon", self.btn_recon))
+        self.btn_track.clicked.connect(lambda: self._toggle_module("track", self.btn_track))
 
         # Nav buttons tracking
-        self.nav_buttons = [self.btn_recon, self.btn_track, self.btn_zprop]
+        self.nav_buttons = [self.btn_recon, self.btn_track]
         self.active_button = None
+        self.active_module = None
 
         # Start with welcome screen
         self.stack.setCurrentWidget(self.welcome)
         self._set_active_button(None)
 
     # ------------ Helpers ------------
-    def _toggle_module(self, widget, button):
-        """Show widget if not active; if already active -> show welcome."""
+    def _toggle_module(self, module_name, button):
+        """Show module, cleanup previous one if switching, toggle back to welcome if same pressed"""
+        # If same button pressed again → go back to welcome
         if self.active_button is button:
+            self._cleanup_active_module()
             self.stack.setCurrentWidget(self.welcome)
             self._set_active_button(None)
             return
+
+        # Switching to another module → cleanup current
+        self._cleanup_active_module()
+
+        # Create module if not already made
+        if module_name == "recon":
+            self.recon_module = ReconstructionModule()
+            widget = self.recon_module
+        elif module_name == "track":
+            self.tracking_module = ParticleTrackingModule()
+            widget = self.tracking_module
+        else:
+            widget = self.welcome
+
+        self.stack.addWidget(widget)
         self.stack.setCurrentWidget(widget)
         self._set_active_button(button)
+        self.active_module = widget
+
+    def _cleanup_active_module(self):
+        """Release memory from active module if it defines cleanup()"""
+        if self.active_module:
+            if hasattr(self.active_module, "cleanup"):
+                self.active_module.cleanup()
+            self.stack.removeWidget(self.active_module)
+            self.active_module.deleteLater()
+            self.active_module = None
 
     def _set_active_button(self, button):
         """Update styles and checked state for nav buttons."""
@@ -145,4 +167,5 @@ if __name__ == "__main__":
     window = MainApp()
     window.show()
     sys.exit(app.exec_())
+
 

@@ -1,7 +1,12 @@
 import glob
+import os
 import re
+import numpy as np
+from PIL import Image
+import imageio.v2 as imageio
 
 import matplotlib.pyplot as plt
+
 def atoi(text):
     return int(text) if text.isdigit() else text
 
@@ -57,86 +62,101 @@ def cropping_image(image, h, w, corner):
     return image
     
 
-def save_video(folder, savefolder, fps=12, quality=10):
+# -------------------- Save individual frames --------------------
+def save_frame(frame, folder, name, cmap='gray', annotate=False, annotatename='', dpi=300):
     """
-    Saves a video to a folder. Uses maximal settings for imageio writer. fps is defined in config.
-    
-    savefolder = Where and name of the video.
-    folder = Directory containing n_frames .png files.
+    Save a single frame to disk with optional annotation.
     """
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, f"{name}.png")
 
-    #Check if package exists
-    try:
-        #import imageio
-        import imageio.v2 as imageio
-    except ImportError:
-        print("Package imageio not installed. Please install with 'pip install imageio'.")
-        return
+    if annotate:
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots()
+        ax.imshow(frame, cmap=cmap)
+        ax.annotate(
+            annotatename,
+            xy=(0.015, 0.985),
+            xycoords='axes fraction',
+            fontsize=14,
+            ha='left',
+            va='top',
+            color='white'
+        )
+        ax.axis('off')
+        fig.savefig(path, bbox_inches="tight", pad_inches=0, dpi=dpi)
+        plt.close(fig)
+    else:
+        import matplotlib.pyplot as plt
+        plt.imsave(path, frame, cmap=cmap, dpi=dpi)
 
-    writer = imageio.get_writer(savefolder, mode='I', codec='mjpeg', fps=fps, quality=quality, pixelformat='yuvj444p', macro_block_size=1)
-    #writer = imageio.get_writer(savefolder, mode = 'I')
+# -------------------- Save video (.avi or .mp4) --------------------
+def save_video(folder, savefile, fps=12, codec='MJPG', quality=10):
+    """
+    Save a folder of PNG frames as a high-quality video (.avi or .mp4).
 
-    imgs = glob.glob(folder + "*.png")
+    Requires ffmpeg installed for mp4 output.
+
+    Args:
+        folder (str): Path to folder containing PNG frames.
+        savefile (str): Output video file path (.avi or .mp4 recommended).
+        fps (int): Frames per second.
+        codec (str): Codec, e.g., 'MJPG', 'XVID', 'H264'.
+        quality (int): For MJPG codec (1-10).
+    """
+    if not os.path.exists(folder):
+        raise ValueError(f"Folder does not exist: {folder}")
+
+    imgs = glob.glob(os.path.join(folder, "*.png"))
+    if not imgs:
+        raise ValueError(f"No PNG files found in folder: {folder}")
+
     imgs.sort(key=natural_keys)
+
+    # Force the ffmpeg plugin
+    writer = imageio.get_writer(savefile, format='FFMPEG', mode='I', fps=fps, codec=codec, quality=quality)
+
     for file in imgs:
-        im = imageio.imread(file)
-        writer.append_data(im)
+        img = imageio.imread(file)
+
+        # Ensure uint8
+        if img.dtype != np.uint8:
+            img = np.clip(img, 0, 255).astype(np.uint8)
+
+        # Ensure 3-channel RGB for video
+        if len(img.shape) == 2:
+            img = np.stack([img]*3, axis=-1)
+        elif img.shape[2] == 4:  # RGBA -> RGB
+            img = img[:, :, :3]
+
+        writer.append_data(img)
+
     writer.close()
-    
-def gif_old(folder, savefolder, duration=100, loop=0):
-    """
-    Save frames to a gif. 
-    
-    folder = Directory containing .png files.
-    """
-    try:
-        from PIL import Image
-    except ImportError:
-        print("Package PIL not installed. Please install with 'pip install Pillow'.")
-        return
+    print(f"Video saved: {savefile}")
 
-    # Create the frames
-    frames = []
-    imgs = glob.glob(folder + "*.png")
-    imgs.sort(key=natural_keys)
-    for file_name in imgs:
-        new_frame = Image.open(file_name)
-        new_frame = new_frame.convert("P", palette=Image.ADAPTIVE)
-
-        frames.append(new_frame)
-    # Save into a GIF file that loops forever
-    frames[0].save(savefolder, format='GIF', append_images=frames[1:] , save_all=True, duration=duration, loop=loop)
-
-def gif(folder, savefolder, duration=100, loop=0):
+# -------------------- Save GIF --------------------
+def save_gif(folder, savefile, duration=100, loop=0, resize=None):
     """
-    Save frames to a gif. 
-    folder = Directory containing .png files.
+    Save frames from folder as GIF with better quality.
+    resize: tuple (width, height) if resizing is needed, otherwise None
     """
-    try:
-        from PIL import Image
-    except ImportError:
-        print("Package PIL not installed. Please install with 'pip install Pillow'.")
-        return
-
-    imgs = glob.glob(folder + "/*.png")
+    imgs = glob.glob(os.path.join(folder, "*.png"))
+    if not imgs:
+        raise ValueError("No PNG files found in folder")
     imgs.sort(key=natural_keys)
 
-    # Load first frame and quantize once
-    first = Image.open(imgs[0]).convert("P", palette=Image.ADAPTIVE)
-    palette = first.getpalette()
-    frames = [first]
+    frames = [Image.open(f).convert("RGBA") for f in imgs]
 
-    # Reuse the same palette for all other frames (much faster!)
-    for file_name in imgs[1:]:
-        frame = Image.open(file_name).convert("P")
-        frame.putpalette(palette)
-        frames.append(frame)
+    if resize:
+        frames = [f.resize(resize, Image.LANCZOS) for f in frames]
 
     frames[0].save(
-        savefolder,
-        format='GIF',
-        append_images=frames[1:],
+        savefile,
+        format="GIF",
         save_all=True,
+        append_images=frames[1:],
         duration=duration,
-        loop=loop
+        loop=loop,
+        optimize=True
     )
+    print(f"GIF saved: {savefile}")

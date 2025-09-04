@@ -89,6 +89,69 @@ class Propagator():
             propagations[i] = refocused
 
         return propagations
+    
+    def forward_fields(self, x, Z=None):
+        """
+        Propagate one or more fields x by a single Z value.
+
+        Inputs:
+            x : torch.Tensor
+                Field(s) to propagate. Shape can be (H, W) for a single field
+                or (N, H, W) for multiple fields.
+            Z : float
+                Propagation distance. If None, uses self.zv.
+
+        Returns:
+            torch.Tensor
+                Propagated field(s) with same batch dimensions as input.
+        """
+        
+        if Z is not None:
+            self.zv = [Z]  # Store as a list for compatibility
+            self.precalculate_Tz()
+
+        # Ensure x is a complex torch tensor
+        if not torch.is_tensor(x):
+            x = torch.tensor(x, dtype=torch.complex64, device=self.device)
+        elif not torch.is_complex(x):
+            x = x.to(torch.complex64)
+
+        # Add batch dimension if single field
+        single_field = False
+        if x.ndim == 2:
+            x = x.unsqueeze(0)  # shape (1, H, W)
+            single_field = True
+
+        N, H, W = x.shape
+
+        # Pad each field if needed
+        if self.padding > 0:
+            x = torch.nn.functional.pad(x, (self.padding, self.padding, self.padding, self.padding))
+
+        # FFT of each field
+        f1 = torch.fft.fft2(x)
+
+        # Prepare output tensor
+        propagated = torch.zeros_like(x, dtype=torch.complex64)
+
+        # Propagate using the first (and only) Z value
+        refocused = torch.fft.ifft2(self.Tz[0] * f1)
+
+        # Remove padding
+        if self.padding > 0:
+            refocused = refocused[..., self.padding:-self.padding, self.padding:-self.padding]
+
+        propagated = refocused
+
+        # Remove batch dim if single field
+        if single_field:
+            propagated = propagated.squeeze(0)
+
+        return propagated
+
+
+
+
 
     def precalculate_Tz(self):
         """

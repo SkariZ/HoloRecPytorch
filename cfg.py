@@ -32,6 +32,13 @@ rec_params_full = {
     'cornerf': 1,
     }
 
+zprop_defaults = {
+    "z_min": -5.0,       # in µm
+    "z_max": 5.0,      # in µm
+    "z_steps": 50,      # number of steps
+    "wavelength": 0.532 # in µm
+}
+
 # Tooltips for reconstruction parameters
 rec_param_descriptions = {
     'filename': 'Path to your video file',
@@ -58,4 +65,9 @@ rec_param_descriptions = {
     'save_movie_gif': 'Save GIF movie of reconstructed frames (1=yes, 0=no)',
     'colormap': 'Colormap for saved images (e.g., gray, viridis)',
     'cornerf': 'Corner for cropping during reconstruction',
+    'zprop': 'Z-propagation settings',
+    'z_min': 'Minimum z-value (µm)',
+    'z_max': 'Maximum z-value (µm)',
+    'z_steps': 'Number of z-steps',
+    'wavelength': 'Wavelength (µm)',
 }
