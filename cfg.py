@@ -2,7 +2,7 @@
 
 # Parameters for the reconstruction
 rec_params = {
-    'filename': 'C:/MyFolder/xxx.avi',
+    'filename': 'Utils/sample_vid.avi',
     'frame_idx': 0,
     'height': 1450,
     'width': 1930,
@@ -21,8 +21,9 @@ rec_params = {
 
 # Parameters for full field reconstruction
 rec_params_full = {
-    'save_folder': 'C:/myFolder/xxx',
+    'save_folder': 'Utils/res/xxx',
     'n_frames': 100,
+    'n_frames_max_mem': 500, # Max number of frames to load into memory at once
     'start_frame': 0,
     'n_frames_step': 1,
     'fft_save': 1,
@@ -58,6 +59,7 @@ rec_param_descriptions = {
     'sigma': 'Sigma for smoothing kernel',
     'save_folder': 'Folder to save reconstructed images and fields',
     'n_frames': 'Number of frames to reconstruct',
+    'n_frames_max_mem': 'Max number of frames to load into memory at once',
     'start_frame': 'Starting frame index for reconstruction',
     'n_frames_step': 'Step between frames',
     'fft_save': 'Save FFT images (1=yes, 0=no)',

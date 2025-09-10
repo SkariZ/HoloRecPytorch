@@ -266,7 +266,6 @@ class HolographicReconstruction(nn.Module):
             holograms.shape[0], self.xrc, self.yrc, device=self.device
             ).type(torch.complex64)
 
-        print(f"Reconstructing {holograms.shape[0]} holograms.")
         for i, holo in enumerate(holograms):
 
             #Subtract the mean
@@ -351,3 +350,9 @@ class HolographicReconstruction(nn.Module):
         """
         ffts = FL.field_to_vec_multi(fields, self.rad, mask=self.mask_list[0])
         return ffts
+    
+    def get_fft_number_of_points(self):
+        """
+        Get the number of points in the FFT.
+        """
+        return int(torch.sum(self.mask_list[0]).item())

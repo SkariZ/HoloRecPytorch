@@ -165,6 +165,12 @@ class MainApp(QMainWindow):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = MainApp()
+
+    screen = app.primaryScreen()
+    size = screen.availableGeometry().size()
+    window.resize(min(1400, size.width()), min(900, size.height()))
+    #window.setMaximumSize(size.width(), size.height())
+
     window.show()
     sys.exit(app.exec_())
 

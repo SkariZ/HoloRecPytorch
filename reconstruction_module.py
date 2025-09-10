@@ -34,8 +34,15 @@ class ImageWidget(QWidget):
     def initUI(self):
         layout = QVBoxLayout()
         self.setLayout(layout)
+        
         self.canvas = FigureCanvas(plt.Figure())
+        
+        # Make the canvas expand with the parent widget
+        self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.canvas.updateGeometry()
+        
         layout.addWidget(self.canvas)
+        
         self.ax = self.canvas.figure.add_subplot(111)
         self.update_plot()
         self.ax.set_title(self.title)
@@ -215,7 +222,8 @@ class ReconstructionModule(QWidget):
         self.image_layout = QGridLayout()
         main_layout.addLayout(self.image_layout)
 
-        self.titles = ["Fft centered", "Histogram Hologram", "First phase", "First phase background", "Imaginary part", "Real part"]
+        self.titles = ["Fft centered", "Histogram Hologram", "First phase", 
+                       "First phase background", "Imaginary part", "Real part"]
         self.image_widgets = []
 
         for i in range(6):
@@ -227,7 +235,14 @@ class ReconstructionModule(QWidget):
                 self.image_widgets.append(ImageWidget(data, title=self.titles[i]))
             self.image_layout.addWidget(self.image_widgets[-1], i//2, i%2)
 
-        self.show()
+        # Set column/row stretches
+        self.image_layout.setColumnStretch(0, 1)
+        self.image_layout.setColumnStretch(1, 1)
+        self.image_layout.setRowStretch(0, 1)
+        self.image_layout.setRowStretch(1, 1)
+        self.image_layout.setRowStretch(2, 1)
+
+        #self.show()
 
     # ---------------- Helper functions ----------------
     def select_file(self, line_edit):
@@ -300,7 +315,7 @@ class ReconstructionModule(QWidget):
                 self.frame = iu.cropping_image(self.frame, h=param_values['height'], w=param_values['width'], corner=param_values['corner'])
 
 
-            #Perform reconstruction
+            # Initialize reconstruction object
             self.R = rec.HolographicReconstruction(
                 image_size=(param_values['height'], param_values['width']),
                 first_image=self.frame,
@@ -431,6 +446,9 @@ class ReconstructionModule(QWidget):
                 return
 
             # Try interpreting as index first
+            # Split by space and take first part
+            text = text.split()[0]
+
             if text.isdigit():
                 idx = int(text)
                 idx = max(0, min(idx, self.z_slider.maximum()))
@@ -455,15 +473,15 @@ class ReconstructionModule(QWidget):
             self.z_info.setText("Invalid focus input")
 
 
-
     def reconstruction(self):
-        # Retrieve parameter values
-        param_values = {param: input_field.text() for param, input_field in self.param_inputs.items()}
-
         
-        # Transform values to correct type
+        start_time = time.time()
+
+        # ---------------- Retrieve parameters ----------------
+        param_values = {param: input_field.text() for param, input_field in self.param_inputs.items()}
         param_values['save_folder'] = param_values['save_folder']
         param_values['n_frames'] = int(param_values['n_frames'])
+        param_values['n_frames_max_mem'] = int(param_values['n_frames_max_mem'])
         param_values['start_frame'] = int(param_values['start_frame'])
         param_values['n_frames_step'] = int(param_values['n_frames_step'])
         param_values['fft_save'] = int(param_values['fft_save'])
@@ -472,128 +490,135 @@ class ReconstructionModule(QWidget):
         param_values['colormap'] = param_values['colormap']
         param_values['cornerf'] = int(param_values['cornerf'])
 
-        # Create folder for saving the images
-        os.makedirs(f"{param_values['save_folder']}", exist_ok=True)
+        # ---------------- Create folders ----------------
         os.makedirs(f"{param_values['save_folder']}/field/", exist_ok=True)
         os.makedirs(f"{param_values['save_folder']}/images/", exist_ok=True)
         os.makedirs(f"{param_values['save_folder']}/frames/", exist_ok=True)
 
-        # Check so that the precalculation is done
+        # ---------------- Check precalculation ----------------
         if self.R is None:
             self.recon_info.setText("No precalculation done")
             return
-        
-        # Read frames from the video
-        frames = rv.read_video(
-            param_values['filename'], 
-            start_frame=param_values['start_frame'], 
-            max_frames=param_values['n_frames'],
-            step=param_values['n_frames_step']
-            )
 
-        # Check so that the frames are not empty
-        if len(frames) == 0:
-            self.recon_info.setText("No frames in the video")
-            return
-        
-        #Crop the frames to the correct size
-        frames = np.stack([iu.cropping_image(f, h=self.R.image_size[0], w=self.R.image_size[1], corner=param_values['cornerf']) for f in frames])
-
-        #Transform frames to tensor and move to device
-        data = torch.tensor(frames).to(self.device)
-
-        #Check so that the frames are the correct size
-        if data.size(1) != self.R.image_size[0] or data.size(2) != self.R.image_size[1]:
-            data = data[:, :self.R.image_size[0], :self.R.image_size[1]]
-            data = data.to(self.device)
-
-        #Perform reconstruction
+        # ---------------- Update reconstruction params ----------------
         self.R.fft_save = param_values['fft_save']
         self.R.recalculate_offset = param_values['recalculate_offset']
 
+        # ---------------- Prepare frame indices ----------------
+        frame_indices = list(range(
+            param_values['start_frame'],
+            param_values['start_frame'] + param_values['n_frames'] * param_values['n_frames_step'],
+            param_values['n_frames_step']
+        ))
 
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()  # wait for any previous GPU work
-        start_time = time.time()
+        n_total_frames = len(frame_indices)
 
-        # Compute
-        data = self.R.forward(data)
+        # ---------------- Create memmap for reconstructed fields ----------------
+        H, W = self.R.image_size
+        dtype = np.complex64 if self.R.fft_save else np.float32
+        n_points = self.R.get_fft_number_of_points() if self.R.fft_save else 0
 
-        # Refocuse the fields 
-        if self.focus_idx is not None:
+        memmap_file = f"{param_values['save_folder']}/field/field.npy"
+        field_memmap = np.lib.format.open_memmap(
+            memmap_file, 
+            mode='w+', 
+            shape=(n_total_frames, n_points) if self.R.fft_save else (n_total_frames,H, W), 
+            dtype=dtype
+            )
 
-            # If fft-stored its needed to go back to image plane.
-            if self.R.fft_save:
-                data = self.R.load_fft(data)
+        # ---------------- Batch processing ----------------
+        all_results = []
+        frames_processed = 0
 
-            # Propagate the fields
-            data = self.propagator.forward_fields(data, Z=self.focus_um)
+        while frames_processed < len(frame_indices):
+            batch_indices = frame_indices[frames_processed:frames_processed + param_values['n_frames_max_mem']]
+            frames_batch = rv.read_video_by_indices(param_values['filename'], batch_indices)
 
-            # Save the propagated fields 
-            if self.R.fft_save:
-                data = self.R.save_fft(data)
+            if len(frames_batch) == 0:
+                break  # No more frames
 
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()  # wait for GPU to finish
+            # Crop frames
+            frames_batch = np.stack([
+                iu.cropping_image(f, h=self.R.image_size[0], w=self.R.image_size[1],
+                                corner=param_values['cornerf']) for f in frames_batch
+            ])
+
+            # Convert to tensor and move to device
+            data_batch = torch.tensor(frames_batch).to(self.device)
+
+            # Forward reconstruction
+            data_batch = self.R.forward(data_batch)
+
+            # Refocus if needed
+            if self.focus_idx is not None:
+                if self.R.fft_save:
+                    data_batch = self.R.load_fft(data_batch)
+                data_batch = self.propagator.forward_fields(data_batch, Z=self.focus_um)
+                if self.R.fft_save:
+                    data_batch = self.R.save_fft(data_batch)
+
+            # Write batch to memmap and flush
+            batch_start = frames_processed
+            batch_end = frames_processed + len(batch_indices)
+            field_memmap[batch_start:batch_end] = data_batch.cpu().numpy()
+            field_memmap.flush()
+
+            frames_processed += len(batch_indices)
+            
+
         end_time = time.time()
+        self.recon_info.setText(f"Reconstruction done in {end_time-start_time:.2f} seconds, "
+                                f"{(end_time-start_time)/field_memmap.shape[0]:.2f} seconds per frame, saving...")
 
-
-        #Change color on the button to show that the reconstruction is done
-        self.recon_button.setStyleSheet("background-color: #00FF00")
-
-        #Print information about the reconstruction
-        self.recon_info.setText(f"Reconstruction done in {end_time-start_time:.2f} seconds \n Time per frame: {(end_time-start_time)/data.shape[0]:.2f} seconds \n saving to {param_values['save_folder']}")
-
-        #Save the fields
-        np.save(f"{param_values['save_folder']}/field/field.npy", data.cpu().numpy())
-
-        #Save images of the fields
+        # ---------------- Save first frame images ----------------
+        first_frame = field_memmap[0:1]
         if self.R.fft_save:
-            data1 = self.R.load_fft(data[:1])
-            data1 = data1.cpu().numpy()
-        else:
-            data1 = data[:1].cpu().numpy()
+            first_frame = self.R.load_fft(torch.tensor(first_frame, device=self.device)).cpu().numpy()
 
-        #Save images
-        plt.imsave(f"{param_values['save_folder']}/images/abs.png", np.abs(data1.squeeze()), cmap=param_values['colormap'])
-        plt.imsave(f"{param_values['save_folder']}/images/real.png", np.real(data1.squeeze()), cmap=param_values['colormap'])
-        plt.imsave(f"{param_values['save_folder']}/images/imag.png", np.imag(data1.squeeze()), cmap=param_values['colormap'])
-        plt.imsave(f"{param_values['save_folder']}/images/phase.png", np.angle(data1.squeeze()), cmap=param_values['colormap'])
-        plt.imsave(f"{param_values['save_folder']}/images/fft.png", np.log10(np.abs(np.fft.fftshift(np.fft.fft2(data1.squeeze())))), cmap=param_values['colormap'])
+        plt.imsave(f"{param_values['save_folder']}/images/abs.png", np.abs(first_frame.squeeze()), cmap=param_values['colormap'])
+        plt.imsave(f"{param_values['save_folder']}/images/real.png", np.real(first_frame.squeeze()), cmap=param_values['colormap'])
+        plt.imsave(f"{param_values['save_folder']}/images/imag.png", np.imag(first_frame.squeeze()), cmap=param_values['colormap'])
+        plt.imsave(f"{param_values['save_folder']}/images/phase.png", np.angle(first_frame.squeeze()), cmap=param_values['colormap'])
+        plt.imsave(f"{param_values['save_folder']}/images/fft.png",
+                np.log10(np.abs(np.fft.fftshift(np.fft.fft2(first_frame.squeeze())))),
+                cmap=param_values['colormap'])
 
+        # ---------------- Save GIF if requested ----------------
+        movie_cap = param_values['n_frames'] if param_values['n_frames'] < 400 else 400  # Max frames for GIF
 
         if param_values['save_movie_gif']:
-            print("Saving movie...")
+            
+            # Load frames and convert if needed
             if self.R.fft_save:
-                field = self.R.load_fft(data).cpu().numpy()
+                field_batch = torch.tensor(field_memmap[:movie_cap]).to(self.device)
+                field = self.R.load_fft(field_batch).cpu().numpy()
             else:
-                field = data.cpu().numpy()
+                field = field_memmap[:movie_cap]
 
-            #Save the frames
             for i, f in enumerate(field):
-                iu.save_frame(f.imag, f"{param_values['save_folder']}/frames/", name=f"imag_{i}", annotate=True, annotatename=f"Frame {i}", dpi=250)
-
-            #Save the movie
-            iu.save_gif(f"{param_values['save_folder']}/frames/", f"{param_values['save_folder']}/images/imag_gif.gif", duration=100, loop=0)
-
-            # Delete all the image files
+                iu.save_frame(f.imag, f"{param_values['save_folder']}/frames/", name=f"imag_{i}",
+                            annotate=True, annotatename=f"Frame {i}", dpi=250)
+            iu.save_gif(f"{param_values['save_folder']}/frames/",
+                        f"{param_values['save_folder']}/images/imag_gif.gif", duration=100, loop=0)
             for f in glob.glob(f"{param_values['save_folder']}/frames/*.png"):
                 os.remove(f)
 
-        # Save the parameters used for the reconstruction to a text file
+        # ---------------- Save parameters ----------------
         with open(f"{param_values['save_folder']}/parameters.txt", "w") as f:
             for k, v in param_values.items():
                 f.write(f"{k}: {v}\n")
-            f.write(f"Time per frame: {(end_time-start_time)/data.shape[0]:.2f} seconds\n")
-
-            # Save the focus parameters if they exist
+            f.write(f"Time per frame: {(time.time() - start_time)/field_memmap.shape[0]:.2f} seconds\n")
             if self.focus_um is not None:
                 f.write(f"Focus (µm): {self.focus_um}\n")
 
-        # Save the R.rad and the R.mask_list[0] to a file for fft-loading
         with open(f"{param_values['save_folder']}/fft_loading.txt", "w") as f:
             f.write(f"radius: {self.R.rad}\n")
             f.write(f"mask: {self.R.mask_list[0]}\n")
             f.write(f"xsize: {self.R.xrc}\n")
             f.write(f"ysize: {self.R.yrc}\n")
+
+        # ---------------- Update UI ----------------
+        self.recon_button.setStyleSheet("background-color: #00FF00")
+        
+
 

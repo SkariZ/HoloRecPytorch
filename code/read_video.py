@@ -19,10 +19,46 @@ def read_video(filename, start_frame=0, max_frames=None, step=1):
 
         if max_frames is not None and i >= max_frames:
             break
-        frames.append(frame[...,0])
+        frames.append(frame[...,0]) # Assuming grayscale video...
 
     frames = np.array(frames, dtype=np.float32)
 
     video.release()
 
     return frames
+
+def read_video_by_indices(filename, indices):
+    """
+    Read specific frames from a video file and return them as a numpy array.
+
+    Args:
+        filename (str): Path to video file.
+        indices (list[int]): Frame indices to read (0-based).
+
+    Returns:
+        np.ndarray: Array of frames (grayscale, float32), shape (len(indices), H, W)
+    """
+    video = cv2.VideoCapture(filename)
+    frames = []
+
+    # Sort indices just in case
+    indices = sorted(indices)
+    next_idx_ptr = 0  # Pointer to next frame index in the list
+
+    current_frame = 0
+    total_frames = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    while next_idx_ptr < len(indices) and current_frame < total_frames:
+        ret, frame = video.read()
+        if not ret:
+            break
+
+        if current_frame == indices[next_idx_ptr]:
+            # Extract grayscale if needed
+            frames.append(frame[..., 0] if frame.ndim == 3 else frame)
+            next_idx_ptr += 1
+
+        current_frame += 1
+
+    video.release()
+    return np.array(frames, dtype=np.float32)
