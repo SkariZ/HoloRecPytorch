@@ -20,6 +20,7 @@ class HolographicReconstruction(nn.Module):
             correct_fourier_peak=(0, 0),
             mask_radiis=None,
             mask_case="ellipse",
+            mask_out=True,
             recalculate_offset=True,
             phase_corrections=3,
             skip_background_correction=False,
@@ -43,6 +44,7 @@ class HolographicReconstruction(nn.Module):
         self.correct_fourier_peak = correct_fourier_peak
         self.mask_radiis = mask_radiis
         self.mask_case = mask_case
+        self.mask_out = mask_out
         self.recalculate_offset = recalculate_offset
         self.phase_corrections = phase_corrections
         self.skip_background_correction = skip_background_correction
@@ -67,6 +69,7 @@ class HolographicReconstruction(nn.Module):
             "correct_fourier_peak": self.correct_fourier_peak,
             "mask_radiis": self.mask_radiis,
             "mask_case": self.mask_case,
+            "mask_out": self.mask_out,
             "recalculate_offset": self.recalculate_offset,
             "phase_corrections": self.phase_corrections,
             "skip_background_correction": self.skip_background_correction,
@@ -152,6 +155,21 @@ class HolographicReconstruction(nn.Module):
             (self.first_image) * torch.exp(1j*(self.kx_add_ky)))
             ) * self.mask_list[0]
         
+        #Mask out unwanted peaks in the fft
+        if self.mask_out:
+            self.mask_list[0] = self.mask_out_peaks(
+                self.fftIm2, 
+                self.mask_list[0], 
+                inner_radius=self.filter_radius//2, 
+                outer_radius=self.filter_radius, 
+                num_peaks=7, 
+                mask_size=20,
+                mask_type='ellipse',
+                threshold=0.1
+                )
+            
+            self.fftIm2 = self.fftIm2 * self.mask_list[0]
+
         # Calculate the first field and phase
         self.first_field = torch.fft.ifft2(torch.fft.fftshift(self.fftIm2)).to(self.device)
         self.first_phase = torch.angle(self.first_field).to(self.device)
@@ -247,6 +265,111 @@ class HolographicReconstruction(nn.Module):
         # Add a channel dimension
         kernel = kernel.view(1, 1, size, size)
         return kernel
+
+    def gaussian_smooth(self,x, kernel_size=5, sigma=3):
+        """
+        x: 2D tensor (H x W)
+        kernel_size: int
+        sigma: float
+        """
+        device = x.device
+        coords = torch.arange(kernel_size, device=device) - kernel_size // 2
+        x_grid, y_grid = torch.meshgrid(coords, coords, indexing='ij')
+        kernel = torch.exp(-(x_grid**2 + y_grid**2) / (2 * sigma**2))
+        kernel = kernel / kernel.sum()
+        kernel = kernel.view(1, 1, kernel_size, kernel_size).float()
+
+        x = x.unsqueeze(0).unsqueeze(0)  # add batch & channel
+        x_smooth = F.conv2d(x, kernel, padding=kernel_size // 2)
+        return x_smooth.squeeze()
+
+
+    def mask_out_peaks(
+        self,
+        fft_image,                # complex tensor [H, W]
+        base_mask,                # existing mask to preserve main sideband
+        inner_radius=100,         # preserve inside this radius (px)
+        outer_radius=300,         # only look for peaks within this annulus
+        num_peaks=7,              # max peaks to remove
+        mask_size=15,             # size of the mask to remove peaks
+        mask_type='ellipse',      # 'ellipse' or 'circle'
+        threshold=0.1             # intensity threshold for peak detection
+    ):
+        """
+        Mask out unwanted peaks in the FFT image outside the main holographic sideband.
+        Combines with a base mask.
+        Returns a mask tensor that can be multiplied with fft_image.
+        """
+        device = fft_image.device
+        H, W = fft_image.shape
+        y, x = torch.meshgrid(torch.arange(H, device=device), torch.arange(W, device=device), indexing='ij')
+        xc, yc = H // 2, W // 2
+        r = torch.sqrt((x - yc)**2 + (y - xc)**2)
+
+        # Compute intensity
+        intensity = torch.abs(fft_image)**2
+
+        # Define region outside the inner sideband
+        outside_mask = (r > inner_radius) & (r < outer_radius)
+
+        # Normalize only in the outside region
+        max_outside = intensity[outside_mask].max()
+        intensity = intensity / (max_outside + 1e-12)  # avoid division by zero
+
+        # Optional: apply Gaussian smoothing
+        intensity = self.gaussian_smooth(intensity, kernel_size=5, sigma=1.5)
+
+        # Set threshold relative to the normalized max outside
+        threshold = threshold * intensity[outside_mask].max()
+
+        # Find candidate peak locations
+        candidates = (intensity > threshold) & outside_mask & (base_mask.bool() == 1)
+        
+        if candidates.sum() == 0:
+            return base_mask  # No peaks to remove
+        
+        # Non-overlapping peak selection
+        H, W = intensity.shape
+        suppression_mask = torch.zeros_like(intensity, dtype=torch.bool)
+        top_peaks = []
+
+        flat_idx = torch.nonzero(candidates, as_tuple=False)
+        peak_vals = intensity[flat_idx[:, 0], flat_idx[:, 1]]
+        sorted_vals, indices = torch.sort(peak_vals, descending=True)
+        sorted_peaks = flat_idx[indices]
+
+        for peak in sorted_peaks:
+            y0, x0 = peak[0].item(), peak[1].item()
+            
+            if suppression_mask[y0, x0]:
+                continue
+
+            top_peaks.append([y0, x0])
+            if len(top_peaks) >= num_peaks:
+                break
+
+            # Suppress neighborhood to avoid overlap
+            y_min = max(0, y0 - mask_size)
+            y_max = min(H, y0 + mask_size + 1)
+            x_min = max(0, x0 - mask_size)
+            x_max = min(W, x0 + mask_size + 1)
+            suppression_mask[y_min:y_max, x_min:x_max] = True
+
+        top_peaks = torch.tensor(top_peaks, device=intensity.device)
+
+        # Build new mask starting from base_mask
+        mask = base_mask.clone().float()
+
+        for peak in top_peaks:
+            y0, x0 = peak[0], peak[1]
+            if mask_type == 'ellipse':
+                yy = ((y - y0)/mask_size)**2 + ((x - x0)/mask_size)**2
+                mask[yy <= 1] = 0
+            elif mask_type == 'circle':
+                yy = (y - y0)**2 + (x - x0)**2
+                mask[yy <= mask_size**2] = 0
+
+        return mask
 
 
     def forward(self, holograms):

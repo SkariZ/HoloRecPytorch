@@ -286,6 +286,7 @@ class ReconstructionModule(QWidget):
             #If mask_radiis is a list of integers, split it by comma and convert to list of integers
             param_values['mask_radiis'] = [int(r) for r in param_values['mask_radiis'].split(',')] if not param_values['mask_radiis'] == 'None' else None
             param_values['mask_case'] = param_values['mask_case']
+            param_values['mask_out'] = int(param_values['mask_out'])
             param_values['phase_corrections'] = int(param_values['phase_corrections'])
             param_values['skip_background_correction'] = int(param_values['skip_background_correction'])
             param_values['correct_field'] = int(param_values['correct_field'])
@@ -324,6 +325,7 @@ class ReconstructionModule(QWidget):
                 filter_radius=param_values['filter_radius'],
                 mask_radiis=param_values['mask_radiis'],
                 mask_case=param_values['mask_case'],
+                mask_out=param_values['mask_out'],
                 phase_corrections=param_values['phase_corrections'],
                 skip_background_correction=param_values['skip_background_correction'],
                 correct_field=param_values['correct_field'],
