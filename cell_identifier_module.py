@@ -207,6 +207,14 @@ class CellIdentifierModule(QWidget):
         self.image_widget = ImageWidget(np.zeros((128, 128)), title="Preview")
         main_layout.addWidget(self.image_widget, 3)  # image panel stretch factor 3
 
+        # After all the buttons
+        param_layout.addStretch(1)
+        main_layout.addLayout(param_layout, 1)
+
+        # Status label at the very bottom
+        self.status_label = QLabel("Ready.")
+        param_layout.addWidget(self.status_label)
+
         self.show()
 
     # ---------------- Handlers ----------------
@@ -347,8 +355,6 @@ class CellIdentifierModule(QWidget):
             "wavelength": wavelength,
             "method": method
         }
-
-
 
     def run_focus_search_all(self):
         if self.full_data is None:
