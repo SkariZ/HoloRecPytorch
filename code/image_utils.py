@@ -7,8 +7,10 @@ import imageio.v2 as imageio
 
 import matplotlib.pyplot as plt
 
+
 def atoi(text):
     return int(text) if text.isdigit() else text
+
 
 def natural_keys(text):
     '''
@@ -18,7 +20,8 @@ def natural_keys(text):
     '''
     return [atoi(c) for c in re.split(r'(\d+)', text) ]
 
-#Save frame in native resolution. Can change colormap if necessary.
+
+# -------------------- Save individual frames --------------------
 def save_frame(frame, folder, name, cmap='gray', annotate='False', annotatename='', dpi=300):
 
     if annotate:
@@ -41,6 +44,7 @@ def save_frame(frame, folder, name, cmap='gray', annotate='False', annotatename=
         plt.imsave(f"{folder}/{name}.png", frame, cmap=cmap, dpi=dpi)
 
 
+# -------------------- Crop image --------------------
 def cropping_image(image, h, w, corner):
     """
     Crops the image
@@ -51,16 +55,16 @@ def cropping_image(image, h, w, corner):
         raise Exception("Cropping size larger than actual image size.")
 
     if corner == 1:
-        image = image[:h, :w] #Top left
+        image = image[:h, :w] # Top left
     elif corner == 2:
-        image = image[:h, -w:] #Top right
+        image = image[:h, -w:] # Top right
     elif corner == 3:
-        image = image[-h:, :w] #Bottom left
+        image = image[-h:, :w] # Bottom left
     elif corner == 4:
-        image = image[-h:, -w:] #Bottom right
+        image = image[-h:, -w:] # Bottom right
 
     return image
-    
+
 
 # -------------------- Save individual frames --------------------
 def save_frame(frame, folder, name, cmap='gray', annotate=False, annotatename='', dpi=300):
@@ -89,6 +93,7 @@ def save_frame(frame, folder, name, cmap='gray', annotate=False, annotatename=''
     else:
         import matplotlib.pyplot as plt
         plt.imsave(path, frame, cmap=cmap, dpi=dpi)
+
 
 # -------------------- Save video (.avi or .mp4) --------------------
 def save_video(folder, savefile, fps=12, codec='MJPG', quality=10):
@@ -134,6 +139,7 @@ def save_video(folder, savefile, fps=12, codec='MJPG', quality=10):
     writer.close()
     print(f"Video saved: {savefile}")
 
+
 # -------------------- Save GIF --------------------
 def save_gif(folder, savefile, duration=100, loop=0, resize=None):
     """
@@ -159,4 +165,3 @@ def save_gif(folder, savefile, duration=100, loop=0, resize=None):
         loop=loop,
         optimize=True
     )
-    print(f"GIF saved: {savefile}")

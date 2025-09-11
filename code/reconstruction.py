@@ -157,9 +157,9 @@ class HolographicReconstruction(nn.Module):
         
         #Mask out unwanted peaks in the fft
         if self.mask_out:
-            self.mask_list[0] = self.mask_out_peaks(
-                self.fftIm2, 
-                self.mask_list[0], 
+            self.mask_out_filter = self.mask_out_peaks(
+                fft_image=self.fftIm2, 
+                base_mask=self.mask_list[0], 
                 inner_radius=self.filter_radius//2, 
                 outer_radius=self.filter_radius, 
                 num_peaks=7, 
@@ -168,7 +168,7 @@ class HolographicReconstruction(nn.Module):
                 threshold=0.1
                 )
             
-            self.fftIm2 = self.fftIm2 * self.mask_list[0]
+            self.fftIm2 = self.fftIm2 * self.mask_out_filter
 
         # Calculate the first field and phase
         self.first_field = torch.fft.ifft2(torch.fft.fftshift(self.fftIm2)).to(self.device)
@@ -369,8 +369,10 @@ class HolographicReconstruction(nn.Module):
                 yy = (y - y0)**2 + (x - x0)**2
                 mask[yy <= mask_size**2] = 0
 
-        return mask
+        # Transform mask to boolean
+        mask = (mask > 0).float()
 
+        return mask
 
     def forward(self, holograms):
         """
@@ -395,18 +397,21 @@ class HolographicReconstruction(nn.Module):
             holo = holo - holo.mean()
 
             #Compute the 2-dimensional discrete Fourier Transform with offset image.
+            # Set first mask as self.mask_list[0] if not self.mask_out else the modified mask
+            mask_mult = self.mask_list[0] if not self.mask_out else self.mask_out_filter
+
             if not self.recalculate_offset:
                 fftImage = torch.fft.fftshift(
                     torch.fft.fft2(
                         holo * torch.exp(1j*(self.kx_add_ky))
-                        )) * self.mask_list[0]
+                        )) * mask_mult
             else:
                 #Find the peak coordinates
                 self.kx_add_ky, _ = self.FPF.find_peak_coordinates(holo)
                 fftImage = torch.fft.fftshift(
                     torch.fft.fft2(
                         holo * torch.exp(1j*(self.kx_add_ky))
-                        )) * self.mask_list[0]
+                        )) * mask_mult
 
             #Inverse 2-dimensional discrete Fourier Transform
             fftImage2 = torch.fft.ifft2(torch.fft.fftshift(fftImage))

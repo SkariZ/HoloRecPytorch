@@ -1,6 +1,34 @@
 import cv2
 import numpy as np
 
+
+def get_video_properties(filename):
+    """
+    Get properties of a video file.
+
+    Args:
+        filename (str): Path to video file.
+
+    Returns:
+        dict: Dictionary containing properties like frame count, width, height, fps.
+    """
+    video = cv2.VideoCapture(filename)
+    
+    if not video.isOpened():
+        raise ValueError(f"Could not open video file: {filename}")
+
+    properties = {
+        'frame_count': int(video.get(cv2.CAP_PROP_FRAME_COUNT)),
+        'width': int(video.get(cv2.CAP_PROP_FRAME_WIDTH)),
+        'height': int(video.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+        'fps': video.get(cv2.CAP_PROP_FPS),
+        'fourcc': int(video.get(cv2.CAP_PROP_FOURCC))
+    }
+
+    video.release()
+    return properties
+
+
 def read_video(filename, start_frame=0, max_frames=None, step=1):
     """
     Read a video file and return the frames as a numpy array.
@@ -26,6 +54,7 @@ def read_video(filename, start_frame=0, max_frames=None, step=1):
     video.release()
 
     return frames
+
 
 def read_video_by_indices(filename, indices):
     """

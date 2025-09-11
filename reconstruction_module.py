@@ -507,6 +507,13 @@ class ReconstructionModule(QWidget):
         self.R.recalculate_offset = param_values['recalculate_offset']
 
         # ---------------- Prepare frame indices ----------------
+
+        # for valididty check that the the number of frames to reconstruct does not exceed the total number of frames in the video
+        n_frames_in_video = int(rv.get_video_properties(param_values['filename'])['frame_count'])
+        if param_values['start_frame'] + (param_values['n_frames'] - 1) * param_values['n_frames_step'] >= n_frames_in_video:
+            self.recon_info.setText("Error: Number of frames to reconstruct exceeds total frames in video, video has only " + str(n_frames_in_video) + " frames.")
+            return
+
         frame_indices = list(range(
             param_values['start_frame'],
             param_values['start_frame'] + param_values['n_frames'] * param_values['n_frames_step'],
