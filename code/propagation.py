@@ -149,10 +149,6 @@ class Propagator():
 
         return propagated
 
-
-
-
-
     def precalculate_Tz(self):
         """
         Precalculate the Tz matrix for the propagator.
@@ -224,7 +220,6 @@ class Propagator():
             propagations = propagations.imag
         elif criterion_pre == 'phase':
             propagations = torch.angle(propagations)
-            #Unwrap phase to 0-2pi
             propagations = torch.remainder(propagations, 2*torch.pi)
         elif criterion_pre == 'sobel':
             kernel = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32, device=self.device).view(1, 1, 3, 3)

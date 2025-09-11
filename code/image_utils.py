@@ -21,29 +21,6 @@ def natural_keys(text):
     return [atoi(c) for c in re.split(r'(\d+)', text) ]
 
 
-# -------------------- Save individual frames --------------------
-def save_frame(frame, folder, name, cmap='gray', annotate='False', annotatename='', dpi=300):
-
-    if annotate:
-        fig, ax = plt.subplots()
-        ax.imshow(frame, cmap=cmap)
-        ax.annotate(
-            annotatename, 
-            xy=(0.015, 0.985),
-            xycoords='axes fraction', 
-            fontsize=14, 
-            horizontalalignment='left', 
-            verticalalignment='top',
-            color='white'
-            )
-        ax.axis('off')
-        fig.savefig(f"{folder}/{name}.png", bbox_inches="tight", pad_inches=0, dpi=dpi)
-        plt.close(fig)
-    
-    else:
-        plt.imsave(f"{folder}/{name}.png", frame, cmap=cmap, dpi=dpi)
-
-
 # -------------------- Crop image --------------------
 def cropping_image(image, h, w, corner):
     """

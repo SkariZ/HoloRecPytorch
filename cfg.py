@@ -35,14 +35,17 @@ rec_params_full = {
     }
 
 zprop_defaults = {
-    "z_min": -5.0,       # in µm
-    "z_max": 5.0,      # in µm
-    "z_steps": 50,      # number of steps
-    "wavelength": 0.532 # in µm
-}
+    "z_min": -2.0,       # in µm
+    "z_max": 2.0,      # in µm
+    "z_steps": 10,      # number of steps
+    "wavelength": 0.532,  # in µm
+    "focus_method": 'default'  # focus method (default, variance, gradient
+    }
 
 # Tooltips for reconstruction parameters
 rec_param_descriptions = {
+    "": "First load a video file and set preprocessing parameters and press the button precalculate.",
+    '----------------------------------------------------': 'Precalculation parameters',
     'filename': 'Path to your video file',
     'frame_idx': 'Index of the first frame to process',
     'height': 'Height of cropped image in pixels',
@@ -59,6 +62,7 @@ rec_param_descriptions = {
     'lowpass_kernel_end': 'End value for lowpass kernel',
     'kernel_size': 'Kernel size for smoothing',
     'sigma': 'Sigma for smoothing kernel',
+    '---------------------------------------------------': 'Reconstruction parameters',
     'save_folder': 'Folder to save reconstructed images and fields',
     'n_frames': 'Number of frames to reconstruct',
     'n_frames_max_mem': 'Max number of frames to load into memory at once',
@@ -69,9 +73,19 @@ rec_param_descriptions = {
     'save_movie_gif': 'Save GIF movie of reconstructed frames (1=yes, 0=no)',
     'colormap': 'Colormap for saved images (e.g., gray, viridis)',
     'cornerf': 'Corner for cropping during reconstruction',
+    '--------------------------------------------------': 'z-propagation parameters',
+
     'zprop': 'Z-propagation settings',
     'z_min': 'Minimum z-value (µm)',
     'z_max': 'Maximum z-value (µm)',
     'z_steps': 'Number of z-steps',
     'wavelength': 'Wavelength (µm)',
+}
+
+# Parameters for cell identification
+cell_id_params = {
+    'fft_radius': 290,
+    'orig_height': 1450,
+    'orig_width': 1930,
+    'mask_case': 'ellipse',
 }
