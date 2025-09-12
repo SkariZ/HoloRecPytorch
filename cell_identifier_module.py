@@ -191,6 +191,12 @@ class CellIdentifierModule(QWidget):
         wl_layout.addWidget(self.wavelength_input)
         param_layout.addLayout(wl_layout)
 
+        # Return unprocessed checkbox
+        self.return_unprocessed_checkbox = QCheckBox("Return unprocessed best focus plane")
+        param_layout.addWidget(self.return_unprocessed_checkbox)
+        self.return_unprocessed_checkbox.setChecked(False)
+        self.return_unprocessed_checkbox.setChecked(CFG.zprop_defaults.get('return_unprocessed', False))
+
         # Method name
         method_layout = QHBoxLayout()
         method_layout.addWidget(QLabel("Method:"))
@@ -210,6 +216,21 @@ class CellIdentifierModule(QWidget):
         self.num_tiffs_spin.setRange(1, 9999)      # sensible upper bound
         self.num_tiffs_spin.setValue(5)            # default matches old hardcoded value
         param_layout.addWidget(self.num_tiffs_spin)
+
+        # Saving channels
+        param_layout.addWidget(QLabel("Channels to save in TIFF:"))
+        self.save_real_checkbox = QCheckBox("Real part")
+        self.save_real_checkbox.setChecked(True)
+        param_layout.addWidget(self.save_real_checkbox)
+
+        self.save_imag_checkbox = QCheckBox("Imag part")
+        self.save_imag_checkbox.setChecked(True)
+        param_layout.addWidget(self.save_imag_checkbox)
+
+        self.save_abs_checkbox = QCheckBox("Absolute value")
+        self.save_abs_checkbox.setChecked(True)
+        param_layout.addWidget(self.save_abs_checkbox)
+
         self.save_tiff_btn = QPushButton("Save Random Frames (.tiff)")
         self.save_tiff_btn.clicked.connect(self.save_random_tiffs)
         param_layout.addWidget(self.save_tiff_btn)
@@ -391,12 +412,15 @@ class CellIdentifierModule(QWidget):
 
         method = self.method_input.text().strip() or CFG.zprop_defaults["method"]
 
+        return_unprocessed = self.return_unprocessed_checkbox.isChecked()
+
         return {
             "z_min": z_min,
             "z_max": z_max,
             "z_steps": z_steps,
             "wavelength": wavelength,
-            "method": method
+            "method": method,
+            "return_unprocessed": return_unprocessed
         }
 
     def run_focus_search_all(self):
@@ -457,7 +481,7 @@ class CellIdentifierModule(QWidget):
             wavelength=z_settings["wavelength"],
             pixel_size=0.114,
             ri_medium=1.33,
-            zv=zv,
+            zv=zv,    
         )
 
         best_index_prev = None
@@ -497,7 +521,8 @@ class CellIdentifierModule(QWidget):
                 frame_cropped,
                 sigma_background=30,
                 previous_index=best_index_prev,
-                alpha=0.8
+                alpha=0.8,
+                return_unprocessed=z_settings["return_unprocessed"]
             )
 
             # store results directly to the disk-backed arrays
@@ -538,29 +563,47 @@ class CellIdentifierModule(QWidget):
             self.status_label.setText("Run focus first")
             return
 
-        if not hasattr(self, 'current_run_folder') or not self.current_run_folder:
-            self.status_label.setText("Run focus first to initialize folder")
-            return
-
-        n_random = self.num_tiffs_spin.value()
+        n_random = self.num_tiffs_spin.value()  # user-specified number of images
         n_frames = self.focused_frames.shape[0]
         selected = random.sample(range(n_frames), min(n_random, n_frames))
 
+        # Determine which channels to save
+        channels = []
+        if self.save_real_checkbox.isChecked():
+            channels.append("real")
+        if self.save_imag_checkbox.isChecked():
+            channels.append("imag")
+        if self.save_abs_checkbox.isChecked():
+            channels.append("abs")
+
+        if len(channels) == 0:
+            self.status_label.setText("No channels selected to save.")
+            return
+
+        # Ensure 'images' folder exists
         images_folder = os.path.join(self.current_run_folder, "images")
         os.makedirs(images_folder, exist_ok=True)
 
-        for frame_idx in selected:
-            frame = self.focused_frames[frame_idx]
+        for i, idx in enumerate(selected):
+            frame = self.focused_frames[idx]
+            # Build RGB array depending on selected channels
+            rgb = np.zeros((frame.shape[0], frame.shape[1], len(channels)), dtype=np.float32)
+            for ch_idx, ch in enumerate(channels):
+                if ch == "real":
+                    rgb[..., ch_idx] = np.real(frame)
+                elif ch == "imag":
+                    rgb[..., ch_idx] = np.imag(frame)
+                elif ch == "abs":
+                    rgb[..., ch_idx] = np.abs(frame)
 
-            # Stack as RGB: real, imag, abs
-            rgb = np.stack([np.real(frame), np.imag(frame), np.abs(frame)], axis=-1).astype(np.float32)
-
-            frame_path = os.path.join(images_folder, f"frame_{frame_idx:04d}.tiff")
-            tifffile.imwrite(frame_path, rgb)
+            fname = os.path.join(images_folder, f"frame_{idx:04d}.tiff")
+            tifffile.imwrite(fname, rgb)
 
         self.status_label.setText(
-            f"Saved {len(selected)} RGB frames to folder: {images_folder}"
+            f"Saved {len(selected)} TIFFs with channels {channels} to: {images_folder}"
         )
+
+
 
 
 

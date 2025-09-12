@@ -261,7 +261,7 @@ class Propagator():
         else:
             return best_field
 
-    def focus_field(self, field, sigma_background=30, previous_index=None, alpha=0.8):
+    def focus_field(self, field, sigma_background=30, previous_index=None, alpha=0.8, return_unprocessed=False):
         """
         Propagate one complex field and select the best-focused plane.
 
@@ -288,8 +288,8 @@ class Propagator():
         import numpy as np
         from scipy.ndimage import gaussian_filter
         
-        if previous_index is None and self.zv is not None:
-            previous_index = len(self.zv) // 2  # Start in middle if no previous
+        # if previous_index is None and self.zv is not None:
+        #    previous_index = len(self.zv) // 2  # Start in middle if no previous
 
         # Background suppression
         background = gaussian_filter(field.real, sigma=sigma_background) + 1j * gaussian_filter(field.imag, sigma=sigma_background)
@@ -309,11 +309,21 @@ class Propagator():
         # Smooth index if previous_index is provided
         if previous_index is not None:
             best_index = int(alpha * previous_index + (1 - alpha) * best_index)
-
+        
         # Get best plane
         best_plane = propagated_stack[best_index]
 
         # Get corresponding z value
         best_z_value = self.zv[best_index] if self.zv is not None else None
+
+        if return_unprocessed:
+            zv_previous = self.zv
+            self.zv = [best_z_value]
+            self.precalculate_Tz()
+
+            best_plane = self.forward(field.to(self.device)).cpu().numpy()
+
+            self.zv = zv_previous
+            self.precalculate_Tz()
 
         return best_plane, best_index, best_z_value

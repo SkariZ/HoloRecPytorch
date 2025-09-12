@@ -39,7 +39,8 @@ zprop_defaults = {
     "z_max": 2.0,      # in µm
     "z_steps": 10,      # number of steps
     "wavelength": 0.532,  # in µm
-    "focus_method": 'default'  # focus method (default, variance, gradient
+    "focus_method": 'default',  # focus method (default, variance, gradient
+    'return_unprocessed': False
     }
 
 # Tooltips for reconstruction parameters
