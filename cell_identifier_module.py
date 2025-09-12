@@ -85,6 +85,7 @@ class CellIdentifierModule(QWidget):
         self.preview_frame = None
         self.fov_coords = None
         self.focused_frames = None
+        self.save_folder = None   # will be set when load_frame is used
         self.initUI()
 
     def initUI(self):
@@ -147,6 +148,18 @@ class CellIdentifierModule(QWidget):
         # Add some spacing
         param_layout.addSpacing(70)
 
+
+        # --- Save folder selector ---
+        param_layout.addWidget(QLabel("Save Folder:"))
+        folder_layout = QHBoxLayout()
+        self.save_folder_input = QLineEdit()
+        self.save_folder_input.setPlaceholderText("Select folder for saving results")
+        folder_btn = QPushButton("Browse")
+        folder_btn.clicked.connect(self.select_save_folder)
+        folder_layout.addWidget(self.save_folder_input)
+        folder_layout.addWidget(folder_btn)
+        param_layout.addLayout(folder_layout)
+
         # ---------------- Z-propagation / focus settings ----------------
         param_layout.addWidget(QLabel("Z-Propagation Settings:"))
 
@@ -186,30 +199,28 @@ class CellIdentifierModule(QWidget):
         param_layout.addLayout(method_layout)
 
         # Button for running focus finding + propagation on ALL frames
-        self.focus_all_btn = QPushButton("Run Focus Search & Propagate (All Frames)")
+        self.focus_all_btn = QPushButton("Run Focus Search & Propagate (All Frames) and Save")
         self.focus_all_btn.clicked.connect(self.run_focus_search_all)
         param_layout.addWidget(self.focus_all_btn)
         param_layout.addSpacing(20)
 
-        # Save buttons
-        self.save_npy_btn = QPushButton("Save Cropped Focused Frames (.npy)")
-        self.save_npy_btn.clicked.connect(self.save_cropped_focused)
-        param_layout.addWidget(self.save_npy_btn)
-
+        # --- Number of random TIFF frames ---
+        param_layout.addWidget(QLabel("Number of random TIFF frames to save:"))
+        self.num_tiffs_spin = QSpinBox()
+        self.num_tiffs_spin.setRange(1, 9999)      # sensible upper bound
+        self.num_tiffs_spin.setValue(5)            # default matches old hardcoded value
+        param_layout.addWidget(self.num_tiffs_spin)
         self.save_tiff_btn = QPushButton("Save Random Frames (.tiff)")
         self.save_tiff_btn.clicked.connect(self.save_random_tiffs)
         param_layout.addWidget(self.save_tiff_btn)
 
+        # After all the buttons
         param_layout.addStretch(1)
-        main_layout.addLayout(param_layout, 1)   # left panel stretch factor 1
+        main_layout.addLayout(param_layout, 1)
 
         # ---------------- Right panel: image ----------------
         self.image_widget = ImageWidget(np.zeros((128, 128)), title="Preview")
         main_layout.addWidget(self.image_widget, 3)  # image panel stretch factor 3
-
-        # After all the buttons
-        param_layout.addStretch(1)
-        main_layout.addLayout(param_layout, 1)
 
         # Status label at the very bottom
         self.status_label = QLabel("Ready.")
@@ -226,6 +237,22 @@ class CellIdentifierModule(QWidget):
         # Keep dataset as memmap
         self.full_data = np.load(fname, mmap_mode='r')
         self.frame_index_spin.setMaximum(self.full_data.shape[0]-1)
+
+        # Update status label
+        self.status_label.setText(f"Loaded data: {fname} with {self.full_data.shape[0]} frames")
+
+        # Folder where the file is located
+        file_folder = os.path.dirname(fname)
+
+        # Go up one level
+        parent_folder = os.path.dirname(file_folder)
+
+        # Create "cell_analysis"
+        self.save_folder = os.path.join(parent_folder, "cell_analysis")
+        os.makedirs(self.save_folder, exist_ok=True)
+
+        # Update GUI input
+        self.save_folder_input.setText(self.save_folder)
 
         # Load only the selected frame
         idx = self.frame_index_spin.value()
@@ -252,9 +279,21 @@ class CellIdentifierModule(QWidget):
                 frame = frame_complex.imag
                 # Frame is a tensor, convert to numpy
                 frame = frame.cpu().numpy()
+        elif not self.fft_checkbox.isChecked() and frame.ndim == 1:
+            # Print warning that frame probably needs FFT- print to qt label
+            self.status_label.setText("Warning: Loaded frame is 1D, consider applying FFT")
+            return
+        else:
+            frame = frame.astype(np.float32)
 
         self.preview_frame = frame.copy()
         self.image_widget.update_data(frame, title=f"Frame {idx}")
+
+    def select_save_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Select Save Folder", self.save_folder or "")
+        if folder:
+            self.save_folder = folder
+            self.save_folder_input.setText(folder)
 
     def get_fft_radius(self):
         text = self.fft_radius_input.text().strip()
@@ -304,6 +343,10 @@ class CellIdentifierModule(QWidget):
                 frame_display = frame_complex.imag
                 # Frame is a tensor, convert to numpy
                 frame_display = frame_display.cpu().numpy()
+        elif not self.fft_checkbox.isChecked() and frame.ndim == 1:
+            # Print warning that frame probably needs FFT- print to qt label
+            self.status_label.setText("Warning: Loaded frame is 1D, consider applying FFT")
+            return
         else:
             frame_display = frame.astype(np.float32)
 
@@ -357,6 +400,11 @@ class CellIdentifierModule(QWidget):
         }
 
     def run_focus_search_all(self):
+        """
+        Run focus search and propagation on all frames in self.full_data.
+        Results (focused complex frames and best z-indexes) are streamed
+        to disk as .npy files (still readable later with mmap_mode='r').
+        """
         if self.full_data is None:
             self.status_label.setText("Load data first")
             return
@@ -366,79 +414,155 @@ class CellIdentifierModule(QWidget):
 
         z_settings = self.get_zprop_settings()
         self.status_label.setText(f"Running focus search with settings: {z_settings}")
-
+        
         start_time = time.time()
 
         x1, y1, x2, y2 = self.fov_coords
-        best_index = None
-        self.focused_frames = np.zeros((self.full_data.shape[0], y2-y1, x2-x1), dtype=np.complex64)
-        self.z_indexes = np.zeros((self.full_data.shape[0],), dtype=np.float32)
+        n_frames = self.full_data.shape[0]
+        crop_h, crop_w = y2 - y1, x2 - x1
+
+        # Ensure save folder exists
+        if not self.save_folder:
+            self.status_label.setText("Select a save folder first")
+            return
+        os.makedirs(self.save_folder, exist_ok=True)
+
+        # Inside save folder, create subfolder for this run called cell and a number, if cell1 exists, use cell2, etc.
+        run_idx = 1
+        while os.path.exists(os.path.join(self.save_folder, f"cell_{run_idx}")):
+            run_idx += 1
+        os.makedirs(os.path.join(self.save_folder, f"cell_{run_idx}"), exist_ok=True)
+        self.status_label.setText(f"Results will be saved to folder: {os.path.join(self.save_folder, f'cell_{run_idx}')}")
+
+        # Paths for saving results
+        self.current_run_folder = os.path.join(self.save_folder, f"cell_{run_idx}")
+
+        # Prepare output files (disk-backed .npy arrays)
+        focused_path = os.path.join(self.current_run_folder, "focused_frames.npy")
+        zvalues_path  = os.path.join(self.current_run_folder, "focus_z_values.npy")
+
+        self.focused_frames = np.lib.format.open_memmap(
+            focused_path, mode="w+", dtype=np.complex64, shape=(n_frames, crop_h, crop_w)
+        )
+        self.z_values = np.lib.format.open_memmap(
+            zvalues_path, mode="w+", dtype=np.float32, shape=(n_frames,)
+        )
+
+        # Initialise propagator once
+        zv = np.linspace(z_settings["z_min"], z_settings["z_max"], z_settings["z_steps"])
+
+        propagator = prop.Propagator(
+            image_size=(crop_h, crop_w),
+            padding=128,
+            wavelength=z_settings["wavelength"],
+            pixel_size=0.114,
+            ri_medium=1.33,
+            zv=zv,
+        )
+
+        best_index_prev = None
 
         for k, frame in enumerate(self.full_data):
             if k % 50 == 0:
-                self.status_label.setText(f"Processing frame {k}/{self.full_data.shape[0]}")
-
+                self.status_label.setText(f"Processing frame {k}/{n_frames}")
+                
+            # ----- optional FFT -----
             if self.fft_checkbox.isChecked():
                 orig_size = self.get_original_image_size()
                 pupil_radius = self.get_fft_radius()
                 mask_shape = self.mask_shape_combo.currentText()
 
-                if orig_size is None:
-                    print("Invalid original size, skipping FFT")
-                else:                    
-                    # Apply FFT
+                if orig_size is not None and pupil_radius is not None:
                     frame_complex = fl.vec_to_field(
                         frame,
                         pupil_radius=pupil_radius,
                         shape=orig_size,
                         mask_shape=mask_shape
                     )
-
-                    # Crop the complex frame
-                    frame_cropped = frame_complex[y1:y2, x1:x2]
+                elif not self.fft_checkbox.isChecked() and frame.ndim == 1:
+                    self.status_label.setText("Warning: Loaded frame is 1D, consider applying FFT")
+                    return
             else:
-                frame_cropped = frame[y1:y2, x1:x2]
+                frame_complex = frame
 
-            # Make sure frame_cropped is a torch tensor
+            # crop
+            frame_cropped = frame_complex[y1:y2, x1:x2]
+
+            # ensure torch tensor for propagator
             if isinstance(frame_cropped, np.ndarray):
-                frame_cropped = torch.tensor(frame_cropped)
+                frame_cropped = torch.tensor(frame_cropped, dtype=torch.complex64, device=propagator.device)
 
-            # Initialize propagator
-            propagator = prop.Propagator(
-                image_size=frame_cropped.shape,
-                padding=128,
-                wavelength=z_settings["wavelength"],
-                wavelength=0.532,   
-                pixel_size=0.114,
-                ri_medium=1.33,
-                )
-            
-            # Propagate the field
-            focused_field, best_index = propagator.focus_field(
+            # propagate and find best focus
+            focused_field, best_index, best_z_value = propagator.focus_field(
                 frame_cropped,
                 sigma_background=30,
-                previous_index=None if best_index is None else best_index,
+                previous_index=best_index_prev,
                 alpha=0.8
             )
 
-    def save_cropped_focused(self):
-        if self.focused_frames is None:
-            print("Run focus first")
-            return
-        fname, _ = QFileDialog.getSaveFileName(self, "Save Numpy", "", "Numpy Files (*.npy)")
-        if fname:
-            np.save(fname, self.focused_frames)
-            print(f"Saved: {fname}")
+            # store results directly to the disk-backed arrays
+            self.focused_frames[k] = focused_field.cpu().numpy() if torch.is_tensor(focused_field) else focused_field
+            self.z_values[k] = best_z_value
+            best_index_prev = best_index
 
-    def save_random_tiffs(self, n_random=5):
-        if self.focused_frames is None:
-            print("Run focus first")
+        elapsed = time.time() - start_time
+        self.status_label.setText(
+            f"Focus search complete: {n_frames} frames processed in {elapsed:.1f} s\n"
+            f"Results saved:\n{focused_path}\n{zvalues_path}"
+        )
+
+        # plot z-values over time and save
+        self.save_focus_plot()
+
+    def save_focus_plot(self):
+        if self.z_values is None:
+            self.status_label.setText("No z-values available yet")
             return
-        selected = random.sample(range(self.focused_frames.shape[0]), min(n_random, self.focused_frames.shape[0]))
-        fname, _ = QFileDialog.getSaveFileName(self, "Save Random TIFFs", "", "TIFF Files (*.tiff)")
-        if fname:
-            tifffile.imwrite(fname, np.array([self.focused_frames[i] for i in selected], dtype=np.float32))
-            print(f"Saved {len(selected)} random frames: {fname}")
+
+        plt.figure(figsize=(8, 4))
+        plt.plot(self.z_values, marker='o', linestyle='-', color='blue', markersize=2.5, linewidth=2)
+        plt.xlabel("Frame index")
+        plt.ylabel("Estimated focus z-position (µm)")
+        plt.title("Focus positions over time")
+        plt.grid(True)
+
+        # Save inside current run folder
+        plot_path = os.path.join(self.current_run_folder, "focus_over_time.png")
+        plt.savefig(plot_path, dpi=200)
+        plt.close()
+
+        self.status_label.setText(f"Focus plot saved to {plot_path}")        
+
+    def save_random_tiffs(self):
+        if self.focused_frames is None:
+            self.status_label.setText("Run focus first")
+            return
+
+        if not hasattr(self, 'current_run_folder') or not self.current_run_folder:
+            self.status_label.setText("Run focus first to initialize folder")
+            return
+
+        n_random = self.num_tiffs_spin.value()
+        n_frames = self.focused_frames.shape[0]
+        selected = random.sample(range(n_frames), min(n_random, n_frames))
+
+        images_folder = os.path.join(self.current_run_folder, "images")
+        os.makedirs(images_folder, exist_ok=True)
+
+        for frame_idx in selected:
+            frame = self.focused_frames[frame_idx]
+
+            # Stack as RGB: real, imag, abs
+            rgb = np.stack([np.real(frame), np.imag(frame), np.abs(frame)], axis=-1).astype(np.float32)
+
+            frame_path = os.path.join(images_folder, f"frame_{frame_idx:04d}.tiff")
+            tifffile.imwrite(frame_path, rgb)
+
+        self.status_label.setText(
+            f"Saved {len(selected)} RGB frames to folder: {images_folder}"
+        )
+
+
 
 
 

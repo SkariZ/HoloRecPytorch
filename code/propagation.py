@@ -287,15 +287,20 @@ class Propagator():
         """
         import numpy as np
         from scipy.ndimage import gaussian_filter
-        from skimage import morphology as morph
-
+        
+        if previous_index is None and self.zv is not None:
+            previous_index = len(self.zv) // 2  # Start in middle if no previous
 
         # Background suppression
         background = gaussian_filter(field.real, sigma=sigma_background) + 1j * gaussian_filter(field.imag, sigma=sigma_background)
         normalized_field = field / (background + 1e-12)
 
+        # Convert to torch tensor
+        if not torch.is_tensor(normalized_field):
+            normalized_field = torch.tensor(normalized_field, dtype=torch.complex64, device=self.device)
+
         # Propagation
-        propagated_stack = self.forward(torch.from_numpy(normalized_field).to(self.device)).cpu().numpy()
+        propagated_stack = self.forward(normalized_field.to(self.device)).cpu().numpy()
 
         # Focus metric
         metrics = [np.std(np.imag(z_plane)) for z_plane in propagated_stack]
@@ -311,4 +316,4 @@ class Propagator():
         # Get corresponding z value
         best_z_value = self.zv[best_index] if self.zv is not None else None
 
-        return best_plane, best_z_value
+        return best_plane, best_index, best_z_value
