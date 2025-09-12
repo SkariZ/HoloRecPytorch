@@ -573,6 +573,9 @@ class ReconstructionModule(QWidget):
             field_memmap.flush()
 
             frames_processed += len(batch_indices)
+
+            if frames_processed % 50 == 0 or frames_processed == n_total_frames:
+                self.recon_info.setText(f"Reconstructed {frames_processed}/{n_total_frames} frames...")
             
 
         end_time = time.time()
