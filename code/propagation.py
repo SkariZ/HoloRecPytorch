@@ -260,3 +260,55 @@ class Propagator():
             return best_field, crit_vals
         else:
             return best_field
+
+    def focus_field(self, field, sigma_background=30, previous_index=None, alpha=0.8):
+        """
+        Propagate one complex field and select the best-focused plane.
+
+        Parameters
+        ----------
+        field : ndarray (H, W), complex
+            Input field.
+        sigma_background : float
+            Gaussian sigma for background suppression.
+        previous_index : int or None
+            If provided, smooth focus index with EMA against this value.
+        alpha : float
+            EMA factor (default=0.8). Higher = stronger smoothing.
+
+        Returns
+        -------
+        best_plane : ndarray
+            Best-focused propagated field (complex).
+        best_index : int
+            Chosen z-plane index (smoothed if previous_index given).
+        metrics : list[float]
+            Focus metric for each plane.
+        """
+        import numpy as np
+        from scipy.ndimage import gaussian_filter
+        from skimage import morphology as morph
+
+
+        # Background suppression
+        background = gaussian_filter(field.real, sigma=sigma_background) + 1j * gaussian_filter(field.imag, sigma=sigma_background)
+        normalized_field = field / (background + 1e-12)
+
+        # Propagation
+        propagated_stack = self.forward(torch.from_numpy(normalized_field).to(self.device)).cpu().numpy()
+
+        # Focus metric
+        metrics = [np.std(np.imag(z_plane)) for z_plane in propagated_stack]
+        best_index = int(np.argmax(metrics))
+
+        # Smooth index if previous_index is provided
+        if previous_index is not None:
+            best_index = int(alpha * previous_index + (1 - alpha) * best_index)
+
+        # Get best plane
+        best_plane = propagated_stack[best_index]
+
+        # Get corresponding z value
+        best_z_value = self.zv[best_index] if self.zv is not None else None
+
+        return best_plane, best_z_value

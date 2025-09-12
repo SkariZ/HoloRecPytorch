@@ -4,6 +4,8 @@ import sys
 import time
 import numpy as np
 import random
+import torch
+
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QLabel,
     QFileDialog, QSpinBox, QCheckBox, QComboBox
@@ -16,6 +18,7 @@ import tifffile
 
 sys.path.append('code')
 import fft_loader as fl
+import propagation as prop
 
 import cfg as CFG
 
@@ -144,8 +147,6 @@ class CellIdentifierModule(QWidget):
         # Add some spacing
         param_layout.addSpacing(70)
 
-
-
         # ---------------- Z-propagation / focus settings ----------------
         param_layout.addWidget(QLabel("Z-Propagation Settings:"))
 
@@ -183,7 +184,6 @@ class CellIdentifierModule(QWidget):
         self.method_input = QLineEdit(CFG.zprop_defaults.get("method", "default"))
         method_layout.addWidget(self.method_input)
         param_layout.addLayout(method_layout)
-
 
         # Button for running focus finding + propagation on ALL frames
         self.focus_all_btn = QPushButton("Run Focus Search & Propagate (All Frames)")
@@ -370,21 +370,56 @@ class CellIdentifierModule(QWidget):
         start_time = time.time()
 
         x1, y1, x2, y2 = self.fov_coords
-        cropped_data = self.full_data[:, y1:y2, x1:x2]
+        best_index = None
+        self.focused_frames = np.zeros((self.full_data.shape[0], y2-y1, x2-x1), dtype=np.complex64)
+        self.z_indexes = np.zeros((self.full_data.shape[0],), dtype=np.float32)
 
-        # TODO: replace with real propagation + focus algorithm
-        focused_list = []
-        for i in range(cropped_data.shape[0]):
-            mid_idx = cropped_data.shape[0] // 2
-            focused_list.append(cropped_data[mid_idx])
+        for k, frame in enumerate(self.full_data):
+            if k % 50 == 0:
+                self.status_label.setText(f"Processing frame {k}/{self.full_data.shape[0]}")
 
-        self.focused_frames = np.array(focused_list, dtype=np.float32)
+            if self.fft_checkbox.isChecked():
+                orig_size = self.get_original_image_size()
+                pupil_radius = self.get_fft_radius()
+                mask_shape = self.mask_shape_combo.currentText()
 
-        elapsed = time.time() - start_time
-        self.status_label.setText(
-            f"Focus search + propagation completed for {self.focused_frames.shape[0]} frames in {elapsed:.2f} seconds."
-        )
+                if orig_size is None:
+                    print("Invalid original size, skipping FFT")
+                else:                    
+                    # Apply FFT
+                    frame_complex = fl.vec_to_field(
+                        frame,
+                        pupil_radius=pupil_radius,
+                        shape=orig_size,
+                        mask_shape=mask_shape
+                    )
 
+                    # Crop the complex frame
+                    frame_cropped = frame_complex[y1:y2, x1:x2]
+            else:
+                frame_cropped = frame[y1:y2, x1:x2]
+
+            # Make sure frame_cropped is a torch tensor
+            if isinstance(frame_cropped, np.ndarray):
+                frame_cropped = torch.tensor(frame_cropped)
+
+            # Initialize propagator
+            propagator = prop.Propagator(
+                image_size=frame_cropped.shape,
+                padding=128,
+                wavelength=z_settings["wavelength"],
+                wavelength=0.532,   
+                pixel_size=0.114,
+                ri_medium=1.33,
+                )
+            
+            # Propagate the field
+            focused_field, best_index = propagator.focus_field(
+                frame_cropped,
+                sigma_background=30,
+                previous_index=None if best_index is None else best_index,
+                alpha=0.8
+            )
 
     def save_cropped_focused(self):
         if self.focused_frames is None:
