@@ -10,7 +10,7 @@ from scipy.ndimage import gaussian_filter1d
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
                              QLineEdit, QPushButton, QLabel, QSizePolicy, QFileDialog,
-                             QDialog, QTextEdit, QSlider)
+                             QDialog, QTextEdit, QSlider, QScrollArea)
 from PyQt5.QtCore import Qt
 
 import cfg as CFG
@@ -215,8 +215,17 @@ class ReconstructionModule(QWidget):
         self.recon_info.setAlignment(Qt.AlignCenter)
         param_layout.addWidget(self.recon_info)
 
-        param_layout.addStretch(1)
-        main_layout.addLayout(param_layout)
+        # ---- wrap the parameter panel in a scroll area ----
+        param_container = QWidget()
+        param_container.setLayout(param_layout)
+
+        param_scroll = QScrollArea()
+        param_scroll.setWidgetResizable(True)
+        param_scroll.setWidget(param_container)
+        param_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        param_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        main_layout.addWidget(param_scroll)
 
         # ---------------- Image Section ----------------
         self.image_layout = QGridLayout()

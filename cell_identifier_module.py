@@ -8,8 +8,9 @@ import torch
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QLabel,
-    QFileDialog, QSpinBox, QCheckBox, QComboBox
+    QFileDialog, QSpinBox, QCheckBox, QComboBox, QScrollArea
 )
+
 from PyQt5.QtCore import Qt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import matplotlib.pyplot as plt
@@ -155,7 +156,6 @@ class CellIdentifierModule(QWidget):
         # Add some spacing
         param_layout.addSpacing(70)
 
-
         # --- Save folder selector ---
         param_layout.addWidget(QLabel("Save Folder:"))
         folder_layout = QHBoxLayout()
@@ -244,7 +244,19 @@ class CellIdentifierModule(QWidget):
 
         # After all the buttons
         param_layout.addStretch(1)
-        main_layout.addLayout(param_layout, 1)
+        #main_layout.addLayout(param_layout, 1)
+
+        # ---- wrap the parameter panel in a scroll area ----
+        param_container = QWidget()
+        param_container.setLayout(param_layout)
+
+        param_scroll = QScrollArea()
+        param_scroll.setWidgetResizable(True)
+        param_scroll.setWidget(param_container)
+        param_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        param_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        main_layout.addWidget(param_scroll, 1)   # left panel with scroll
 
         # ---------------- Right panel: image ----------------
         self.image_widget = ImageWidget(np.zeros((128, 128)), title="Preview")
@@ -304,15 +316,25 @@ class CellIdentifierModule(QWidget):
                     shape=orig_size,
                     mask_shape=mask_shape
                 )
-                frame = frame_complex.imag
+                frame = frame_complex
                 # Frame is a tensor, convert to numpy
                 frame = frame.cpu().numpy()
+
         elif not self.fft_checkbox.isChecked() and frame.ndim == 1:
             # Print warning that frame probably needs FFT- print to qt label
             self.status_label.setText("Warning: Loaded frame is 1D, consider applying FFT")
             return
         else:
-            frame = frame.astype(np.float32)
+            frame = frame.astype(np.complex64)
+
+        # Select channel for display
+        channel = self.channel_combo.currentText()
+        if channel == "real":
+            frame = np.real(frame)
+        elif channel == "imag":
+            frame = np.imag(frame)
+        elif channel == "abs":
+            frame = np.abs(frame)
 
         self.preview_frame = frame.copy()
         self.image_widget.update_data(frame, title=f"Frame {idx}")
