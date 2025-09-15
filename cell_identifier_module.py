@@ -136,6 +136,13 @@ class CellIdentifierModule(QWidget):
         self.frame_index_spin.valueChanged.connect(self.update_preview)
         param_layout.addWidget(self.frame_index_spin)
 
+        param_layout.addWidget(QLabel("Channel for preview:"))
+        self.channel_combo = QComboBox()
+        self.channel_combo.addItems(["real", "imag", "abs"])
+        self.channel_combo.setCurrentText("imag")  # <- pre-select "imag"
+        self.channel_combo.currentTextChanged.connect(self.update_preview)
+        param_layout.addWidget(self.channel_combo)
+
         # Crop buttons
         self.crop_btn = QPushButton("Apply Crop")
         self.crop_btn.clicked.connect(self.apply_crop)
@@ -361,7 +368,7 @@ class CellIdentifierModule(QWidget):
                     shape=orig_size,
                     mask_shape=mask_shape
                 )
-                frame_display = frame_complex.imag
+                frame_display = frame_complex
                 # Frame is a tensor, convert to numpy
                 frame_display = frame_display.cpu().numpy()
         elif not self.fft_checkbox.isChecked() and frame.ndim == 1:
@@ -369,7 +376,16 @@ class CellIdentifierModule(QWidget):
             self.status_label.setText("Warning: Loaded frame is 1D, consider applying FFT")
             return
         else:
-            frame_display = frame.astype(np.float32)
+            frame_display = frame.astype(np.complex64)
+
+        # Select channel for display
+        channel = self.channel_combo.currentText()
+        if channel == "real":
+            frame_display = np.real(frame_display)
+        elif channel == "imag":
+            frame_display = np.imag(frame_display)
+        elif channel == "abs":
+            frame_display = np.abs(frame_display)
 
         self.preview_frame = frame_display.copy()
         self.image_widget.update_data(frame_display, title=f"Frame {idx}")
