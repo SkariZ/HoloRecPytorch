@@ -574,6 +574,10 @@ class CellIdentifierModule(QWidget):
             f"Results saved:\n{focused_path}\n{zvalues_path}"
         )
 
+        # Save the memmaps
+        self.focused_frames.flush()
+        self.z_values.flush()
+
         # plot z-values over time and save
         self.save_focus_plot()
 

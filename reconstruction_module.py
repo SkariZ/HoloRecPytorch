@@ -437,7 +437,7 @@ class ReconstructionModule(QWidget):
         idx = self.z_slider.value()
         self.current_focus_idx = idx
         # Show both index and µm value
-        self.focus_input.setText(f"{idx}  ({self.z_values[idx]:.2f} µm)")
+        self.focus_input.setText(f"{idx}  ({self.z_values[idx-1]:.2f} µm)")
 
         # Safely extract real/imag
         current_field = self.propagated_stack[idx]
@@ -548,6 +548,9 @@ class ReconstructionModule(QWidget):
         all_results = []
         frames_processed = 0
 
+        # Print that reconstruction has started
+        self.recon_info.setText(f"Reconstruction started for {n_total_frames} frames...")
+
         while frames_processed < len(frame_indices):
             batch_indices = frame_indices[frames_processed:frames_processed + param_values['n_frames_max_mem']]
             frames_batch = rv.read_video_by_indices(param_values['filename'], batch_indices)
@@ -589,7 +592,7 @@ class ReconstructionModule(QWidget):
 
         end_time = time.time()
         self.recon_info.setText(f"Reconstruction done in {end_time-start_time:.2f} seconds, "
-                                f"{(end_time-start_time)/field_memmap.shape[0]:.2f} seconds per frame, saving...")
+                                f"{(end_time-start_time)/field_memmap.shape[0]:.2f} seconds per frame")
 
         # ---------------- Save first frame images ----------------
         first_frame = field_memmap[0:1]
@@ -603,6 +606,9 @@ class ReconstructionModule(QWidget):
         plt.imsave(f"{param_values['save_folder']}/images/fft.png",
                 np.log10(np.abs(np.fft.fftshift(np.fft.fft2(first_frame.squeeze())))),
                 cmap=param_values['colormap'])
+
+        # Save memmap file
+        np.save(memmap_file, field_memmap)
 
         # ---------------- Save GIF if requested ----------------
         movie_cap = param_values['n_frames'] if param_values['n_frames'] < 400 else 400  # Max frames for GIF
