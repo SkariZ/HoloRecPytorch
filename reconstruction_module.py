@@ -606,10 +606,7 @@ class ReconstructionModule(QWidget):
         plt.imsave(f"{param_values['save_folder']}/images/fft.png",
                 np.log10(np.abs(np.fft.fftshift(np.fft.fft2(first_frame.squeeze())))),
                 cmap=param_values['colormap'])
-
-        # Save memmap file
-        np.save(memmap_file, field_memmap)
-
+        
         # ---------------- Save GIF if requested ----------------
         movie_cap = param_values['n_frames'] if param_values['n_frames'] < 400 else 400  # Max frames for GIF
 

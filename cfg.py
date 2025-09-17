@@ -22,7 +22,7 @@ rec_params = {
 
 # Parameters for full field reconstruction
 rec_params_full = {
-    'save_folder': 'Utils/results/res/xxx',
+    'save_folder': 'Utils/res/xxx',
     'n_frames': 100,
     'n_frames_max_mem': 500, # Max number of frames to load into memory at once
     'start_frame': 0,
