@@ -510,7 +510,7 @@ class CellIdentifierModule(QWidget):
             zvalues_path, mode="w+", dtype=np.float32, shape=(n_frames,)
         )
 
-        # Initialise propagator once
+        # Initialize propagator once
         zv = np.linspace(z_settings["z_min"], z_settings["z_max"], z_settings["z_steps"])
 
         propagator = prop.Propagator(
@@ -557,9 +557,9 @@ class CellIdentifierModule(QWidget):
             # propagate and find best focus
             focused_field, best_index, best_z_value = propagator.focus_field(
                 frame_cropped,
-                sigma_background=30,
+                sigma_background=25,
                 previous_index=best_index_prev,
-                alpha=0.8,
+                alpha=0.7,
                 return_unprocessed=z_settings["return_unprocessed"]
             )
 

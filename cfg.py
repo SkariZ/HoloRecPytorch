@@ -1,8 +1,8 @@
-# Dummy config for parameters in the form of a dictionary for application
+# Configuration file for holographic reconstruction parameters
 
 # Parameters for the reconstruction
 rec_params = {
-    'filename': 'Utils/sample_vid.avi',
+    'filename': 'utils/sample_vid.avi',
     'frame_idx': 0,
     'height': 1450,
     'width': 1930,
@@ -22,7 +22,7 @@ rec_params = {
 
 # Parameters for full field reconstruction
 rec_params_full = {
-    'save_folder': 'Utils/res/xxx',
+    'save_folder': 'utils/res/xxx',
     'n_frames': 100,
     'n_frames_max_mem': 500, # Max number of frames to load into memory at once
     'start_frame': 0,
