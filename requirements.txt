@@ -1,0 +1,9 @@
+numpy
+torch
+matplotlib
+scipy
+PyQt5
+tifffile
+Pillow
+imageio
+opencv-python
