@@ -139,7 +139,7 @@ class CellIdentifierModule(QWidget):
 
         param_layout.addWidget(QLabel("Channel for preview:"))
         self.channel_combo = QComboBox()
-        self.channel_combo.addItems(["real", "imag", "abs"])
+        self.channel_combo.addItems(["real", "imag", "abs", "phase"])
         self.channel_combo.setCurrentText("imag")  # <- pre-select "imag"
         self.channel_combo.currentTextChanged.connect(self.update_preview)
         param_layout.addWidget(self.channel_combo)
@@ -238,6 +238,10 @@ class CellIdentifierModule(QWidget):
         self.save_abs_checkbox.setChecked(True)
         param_layout.addWidget(self.save_abs_checkbox)
 
+        self.save_phase_checkbox = QCheckBox("Phase")
+        self.save_phase_checkbox.setChecked(False)
+        param_layout.addWidget(self.save_phase_checkbox)
+
         self.save_tiff_btn = QPushButton("Save Random Frames (.tiff)")
         self.save_tiff_btn.clicked.connect(self.save_random_tiffs)
         param_layout.addWidget(self.save_tiff_btn)
@@ -335,6 +339,8 @@ class CellIdentifierModule(QWidget):
             frame = np.imag(frame)
         elif channel == "abs":
             frame = np.abs(frame)
+        elif channel == "phase":
+            frame = np.angle(frame)
 
         self.preview_frame = frame.copy()
         self.image_widget.update_data(frame, title=f"Frame {idx}")
@@ -408,6 +414,8 @@ class CellIdentifierModule(QWidget):
             frame_display = np.imag(frame_display)
         elif channel == "abs":
             frame_display = np.abs(frame_display)
+        elif channel == "phase":
+            frame_display = np.angle(frame_display)
 
         self.preview_frame = frame_display.copy()
         self.image_widget.update_data(frame_display, title=f"Frame {idx}")
@@ -617,6 +625,8 @@ class CellIdentifierModule(QWidget):
             channels.append("imag")
         if self.save_abs_checkbox.isChecked():
             channels.append("abs")
+        if self.save_phase_checkbox.isChecked():
+            channels.append("phase")
 
         if len(channels) == 0:
             self.status_label.setText("No channels selected to save.")
@@ -637,6 +647,8 @@ class CellIdentifierModule(QWidget):
                     rgb[..., ch_idx] = np.imag(frame)
                 elif ch == "abs":
                     rgb[..., ch_idx] = np.abs(frame)
+                elif ch == "phase":
+                    rgb[..., ch_idx] = np.angle(frame)
 
             fname = os.path.join(images_folder, f"frame_{idx:04d}.tiff")
             tifffile.imwrite(fname, rgb)
