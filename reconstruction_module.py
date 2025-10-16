@@ -390,13 +390,12 @@ class ReconstructionModule(QWidget):
             # Generate z values
             self.z_values = np.linspace(z_min, z_max, n_steps)
 
-            # Make sure 0 is included and sorted.
+            # Make sure 0 is included and that the array is sorted.
             if 0 not in self.z_values:
                 self.z_values = np.insert(self.z_values, 0, 0)
-                self.z_values.sort()
-                self.z_values = np.unique(self.z_values)
 
-
+            self.z_values = np.sort(self.z_values)
+            
             # Wavelength (µm → m)
             wavelength = float(self.wavelength_input.text())
 
@@ -417,11 +416,11 @@ class ReconstructionModule(QWidget):
             # Enable slider
             self.z_slider.setEnabled(True)
             self.z_slider.setMaximum(n_steps)
-            self.z_slider.setValue(0)
+            self.z_slider.setValue(int(n_steps // 2))  # Start in the middle
 
             # Feedback text in propagation box
             self.z_info.setText(
-                f"Z-propagation done: {n_steps} steps\nrange {z_min} – {z_max} um"
+                f"Z-propagation done: {n_steps+1} steps\nrange {z_min} – {z_max} um"
             )
 
             # Show first slice
@@ -437,7 +436,7 @@ class ReconstructionModule(QWidget):
         idx = self.z_slider.value()
         self.current_focus_idx = idx
         # Show both index and µm value
-        self.focus_input.setText(f"{idx}  ({self.z_values[idx-1]:.2f} µm)")
+        self.focus_input.setText(f"{idx}  ({self.z_values[idx]:.2f} µm)")
 
         # Safely extract real/imag
         current_field = self.propagated_stack[idx]
