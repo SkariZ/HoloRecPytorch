@@ -5,10 +5,11 @@ import time
 import numpy as np
 import random
 import torch
+import glob
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QLabel,
-    QFileDialog, QSpinBox, QCheckBox, QComboBox, QScrollArea
+    QFileDialog, QSpinBox, QCheckBox, QComboBox, QScrollArea, QTextEdit, QDialog
 )
 
 from PyQt5.QtCore import Qt
@@ -20,6 +21,7 @@ import tifffile
 sys.path.append('code')
 import fft_loader as fl
 import propagation as prop
+import image_utils as iu
 
 import cfg as CFG
 
@@ -97,6 +99,11 @@ class CellIdentifierModule(QWidget):
         # ---------------- Left panel: controls ----------------
         param_layout = QVBoxLayout()
         
+        # Help button
+        self.help_button = QPushButton("Help")
+        self.help_button.clicked.connect(self.show_help)
+        param_layout.addWidget(self.help_button)
+
         # ---------------- FFT Settings ----------------
         self.fft_checkbox = QCheckBox("Apply FFT")
         param_layout.addWidget(self.fft_checkbox)
@@ -239,12 +246,17 @@ class CellIdentifierModule(QWidget):
         param_layout.addWidget(self.save_abs_checkbox)
 
         self.save_phase_checkbox = QCheckBox("Phase")
-        self.save_phase_checkbox.setChecked(False)
+        self.save_phase_checkbox.setChecked(True)
         param_layout.addWidget(self.save_phase_checkbox)
 
         self.save_tiff_btn = QPushButton("Save Random Frames (.tiff)")
         self.save_tiff_btn.clicked.connect(self.save_random_tiffs)
         param_layout.addWidget(self.save_tiff_btn)
+
+        # Create a button to save a gif video of focused frames
+        self.save_gif_btn = QPushButton("Save Focused Frames (.gif)")
+        self.save_gif_btn.clicked.connect(self.save_focused_frames_gif)
+        param_layout.addWidget(self.save_gif_btn)
 
         # After all the buttons
         param_layout.addStretch(1)
@@ -271,6 +283,21 @@ class CellIdentifierModule(QWidget):
         param_layout.addWidget(self.status_label)
 
         self.show()
+
+    def show_help(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Help: Parameter Explanations")
+        layout = QVBoxLayout()
+        help_text = QTextEdit()
+        help_text.setReadOnly(True)
+        help_content = ""
+        for param, desc in CFG.cell_id_param_descriptions.items():
+            help_content += f"{param}: {desc}\n\n"
+        help_text.setText(help_content)
+        layout.addWidget(help_text)
+        dlg.setLayout(layout)
+        dlg.resize(600, 500)
+        dlg.exec_()
 
     # ---------------- Handlers ----------------
     def load_frame(self):
@@ -312,17 +339,22 @@ class CellIdentifierModule(QWidget):
                 print("Invalid original size, skipping FFT")
             else:
                 if pupil_radius is None:
-                    pupil_radius = max(orig_size) // 2  # default: full mask
-
-                frame_complex = fl.vec_to_field(
-                    frame,
-                    pupil_radius=pupil_radius,
-                    shape=orig_size,
-                    mask_shape=mask_shape
-                )
-                frame = frame_complex
-                # Frame is a tensor, convert to numpy
-                frame = frame.cpu().numpy()
+                    pupil_radius = int(max(orig_size) // 2)  # default: full mask
+                
+                try:
+                    frame_complex = fl.vec_to_field(
+                        frame,
+                        pupil_radius=pupil_radius,
+                        shape=orig_size,
+                        mask_shape=mask_shape
+                    )
+                    frame = frame_complex
+                    # Frame is a tensor, convert to numpy
+                    frame = frame.cpu().numpy()
+                except Exception as e:
+                    print(f"Error applying FFT: {e}")
+                    self.status_label.setText(f"Error applying FFT: {e}")
+                    return
 
         elif not self.fft_checkbox.isChecked() and frame.ndim == 1:
             # Print warning that frame probably needs FFT- print to qt label
@@ -390,15 +422,22 @@ class CellIdentifierModule(QWidget):
             if orig_size is None:
                 print("Invalid original size, skipping FFT")
             else:
-                frame_complex = fl.vec_to_field(
-                    frame,
-                    pupil_radius=pupil_radius,
-                    shape=orig_size,
-                    mask_shape=mask_shape
-                )
-                frame_display = frame_complex
-                # Frame is a tensor, convert to numpy
-                frame_display = frame_display.cpu().numpy()
+
+                try:
+                    frame_complex = fl.vec_to_field(
+                        frame,
+                        pupil_radius=pupil_radius,
+                        shape=orig_size,
+                        mask_shape=mask_shape
+                    )
+                    frame_display = frame_complex
+                    # Frame is a tensor, convert to numpy
+                    frame_display = frame_display.cpu().numpy()
+                except Exception as e:
+                    print(f"Error applying FFT: {e}")
+                    self.status_label.setText(f"Error applying FFT: {e}")
+                    return
+
         elif not self.fft_checkbox.isChecked() and frame.ndim == 1:
             # Print warning that frame probably needs FFT- print to qt label
             self.status_label.setText("Warning: Loaded frame is 1D, consider applying FFT")
@@ -656,6 +695,29 @@ class CellIdentifierModule(QWidget):
         self.status_label.setText(
             f"Saved {len(selected)} TIFFs with channels {channels} to: {images_folder}"
         )
+
+    def save_focused_frames_gif(self):
+        if self.focused_frames is None:
+            self.status_label.setText("Run focus first")
+            return
+        
+        create_frames_folder = os.path.join(self.current_run_folder, "frames")
+        os.makedirs(create_frames_folder, exist_ok=True)
+
+        for i, f in enumerate(self.focused_frames):
+            
+            frame = np.imag(f)
+            
+            iu.save_frame(frame, f"{create_frames_folder}/", name=f"image_{i}",
+                        annotate=True, annotatename=f"Frame {i}", dpi=250)
+            
+            self.status_label.setText(f"Saving frames (imaginary part) for GIF to {create_frames_folder}...")
+
+        iu.save_gif(f"{create_frames_folder}/",
+                    f"{self.current_run_folder}/cell_gif.gif", duration=100, loop=0)
+
+        for f in glob.glob(f"{create_frames_folder}/*.png"):
+            os.remove(f)
 
 
 
