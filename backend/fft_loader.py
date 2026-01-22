@@ -1,8 +1,7 @@
 import torch
 import torch.fft as fft
 
-from other_utils import create_circular_mask
-from other_utils import create_ellipse_mask
+from backend.other_utils import create_circular_mask, create_ellipse_mask
 
 def data_to_real(img):
     """

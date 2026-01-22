@@ -10,6 +10,8 @@ from PyQt5.QtCore import Qt
 # Import your modules
 from reconstruction_module import ReconstructionModule
 from cell_identifier_module import CellIdentifierModule
+from particle_tracking_module import ParticleTrackingModule
+
 
 
 class WelcomeWidget(QWidget):
@@ -51,13 +53,14 @@ class MainApp(QMainWindow):
 
         self.btn_recon = QPushButton("Reconstruction")
         self.btn_cell = QPushButton("Cell Identifier")
+        self.btn_tracking = QPushButton("Particle Tracking")
 
         # Create top-level horizontal layout
         nav_bar = QHBoxLayout()
         nav_bar.setAlignment(Qt.AlignCenter)
 
         # Configure buttons first
-        for btn in (self.btn_recon, self.btn_cell):
+        for btn in (self.btn_recon, self.btn_cell, self.btn_tracking):
             btn.setMinimumHeight(60)
             btn.setMinimumWidth(200)
             btn.setCheckable(True)
@@ -70,6 +73,7 @@ class MainApp(QMainWindow):
         # Then add buttons to the layout
         nav_bar.addWidget(self.btn_recon)
         nav_bar.addWidget(self.btn_cell)
+        nav_bar.addWidget(self.btn_tracking)
 
         # Add the nav_bar to the main layout
         main_layout.addLayout(nav_bar)
@@ -84,14 +88,16 @@ class MainApp(QMainWindow):
 
         # Placeholders for modules (created when needed)
         self.recon_module = None
+        self.cell_module = None
         self.tracking_module = None
 
         # Connect buttons to toggle modules
         self.btn_recon.clicked.connect(lambda: self._toggle_module("recon", self.btn_recon))
         self.btn_cell.clicked.connect(lambda: self._toggle_module("cell", self.btn_cell))
+        self.btn_tracking.clicked.connect(lambda: self._toggle_module("tracking", self.btn_tracking))
 
         # Nav buttons tracking
-        self.nav_buttons = [self.btn_recon, self.btn_cell]
+        self.nav_buttons = [self.btn_recon, self.btn_cell, self.btn_tracking]
         self.active_button = None
         self.active_module = None
 
@@ -119,6 +125,9 @@ class MainApp(QMainWindow):
         elif module_name == "cell":
             self.cell_module = CellIdentifierModule()
             widget = self.cell_module
+        elif module_name == "tracking":
+            self.tracking_module = ParticleTrackingModule()
+            widget = self.tracking_module
         else:
             widget = self.welcome
 

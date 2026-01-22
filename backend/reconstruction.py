@@ -2,10 +2,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import other_utils as OU
-import fft_loader as FL
+from backend import other_utils as OU
+from backend import fft_loader as FL
 
-from reconstruction_utils import FourierPeakFinder, PolynomialFitterV2 #PolynomialFitter, PhaseFrequencyFilter,
+from backend.reconstruction_utils import FourierPeakFinder, PolynomialFitterV2
 
 
 class HolographicReconstruction(nn.Module):

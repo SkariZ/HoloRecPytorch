@@ -13,13 +13,12 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGr
                              QDialog, QTextEdit, QSlider, QScrollArea)
 from PyQt5.QtCore import Qt
 
-import cfg as CFG
+from backend import read_video as rv
+from backend import reconstruction as rec
+from backend import image_utils as iu
+from backend import propagation as prop
 
-sys.path.append('code')
-import read_video as rv
-import reconstruction as rec
-import image_utils as iu
-import propagation as prop
+import cfg as CFG
 
 class ImageWidget(QWidget):
     def __init__(self, data, is_histogram=False, title=""):
@@ -639,6 +638,21 @@ class ReconstructionModule(QWidget):
             f.write(f"mask: {self.R.mask_list[0]}\n")
             f.write(f"xsize: {self.R.xrc}\n")
             f.write(f"ysize: {self.R.yrc}\n")
+
+        # --- Save machine-readable metadata for downstream modules (tracking/cell id) ---
+        meta_path = os.path.join(param_values["save_folder"], "field", "field_meta.npz")
+
+        H, W = self.R.image_size  # same as reconstruction image_size
+
+        np.savez(
+            meta_path,
+            fft_save=int(self.R.fft_save),
+            orig_height=int(H),
+            orig_width=int(W),
+            # Only meaningful if fft_save==1 (still safe to store always)
+            pupil_radius=int(getattr(self.R, "rad", -1)),
+            mask_shape="ellipse",  # change if you know it's "circle"
+)
 
         # ---------------- Update UI ----------------
         self.recon_button.setStyleSheet("background-color: #00FF00")

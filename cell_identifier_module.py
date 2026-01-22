@@ -18,10 +18,9 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import RectangleSelector
 import tifffile
 
-sys.path.append('code')
-import fft_loader as fl
-import propagation as prop
-import image_utils as iu
+from backend import fft_loader as fl
+from backend import propagation as prop
+from backend import image_utils as iu
 
 import cfg as CFG
 
@@ -299,15 +298,56 @@ class CellIdentifierModule(QWidget):
         dlg.resize(600, 500)
         dlg.exec_()
 
+    def _try_apply_field_meta(self, npy_path: str):
+        folder = os.path.dirname(npy_path)
+        meta_path = os.path.join(folder, "field_meta.npz")
+        if not os.path.exists(meta_path):
+            self.status_label.setText("No field_meta.npz found (manual FFT settings).")
+            return
+
+        try:
+            meta = np.load(meta_path, allow_pickle=True)
+
+            orig_h = int(meta["orig_height"])
+            orig_w = int(meta["orig_width"])
+            pupil_radius = int(meta["pupil_radius"])
+            mask_shape = str(meta["mask_shape"])
+
+            # Apply to UI
+            self.height_input.setText(str(orig_h))
+            self.width_input.setText(str(orig_w))
+            self.fft_radius_input.setText(str(pupil_radius))
+
+            if mask_shape in ["ellipse", "circle"]:
+                self.mask_shape_combo.setCurrentText(mask_shape)
+
+            # (Optional) also enable FFT checkbox if meta indicates fft_save
+            if "fft_save" in meta.files and int(meta["fft_save"]) == 1:
+                self.fft_checkbox.setChecked(True)
+
+            self.status_label.setText(
+                f"Applied meta: orig=({orig_h},{orig_w}), radius={pupil_radius}, mask={mask_shape}"
+            )
+        except Exception as e:
+            self.status_label.setText(f"Warning: failed to read/apply field_meta.npz: {e}")
+
+
     # ---------------- Handlers ----------------
     def load_frame(self):
         fname, _ = QFileDialog.getOpenFileName(self, "Select Numpy File", "", "Numpy Files (*.npy)")
         if not fname:
             return
 
+        # Auto-apply metadata if present
+        self._try_apply_field_meta(fname)
+
         # Keep dataset as memmap
         self.full_data = np.load(fname, mmap_mode='r')
         self.frame_index_spin.setMaximum(self.full_data.shape[0]-1)
+
+        # If data is (T,N) vectors, auto-enable FFT decoding
+        if self.full_data.ndim == 2:
+            self.fft_checkbox.setChecked(True)
 
         # Update status label
         self.status_label.setText(f"Loaded data: {fname} with {self.full_data.shape[0]} frames")

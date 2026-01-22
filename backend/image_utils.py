@@ -5,7 +5,6 @@ import numpy as np
 from PIL import Image
 import imageio.v2 as imageio
 
-import matplotlib.pyplot as plt
 
 
 def atoi(text):
