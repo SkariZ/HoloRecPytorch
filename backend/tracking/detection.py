@@ -96,12 +96,49 @@ class LoGDetector(DetectorBase):
 
         return [Detection(float(ys[i]), float(xs[i]), float(scores[i])) for i in order]
 
+class UnetBaseDetector(DetectorBase):
+    """
+    Base class for U-Net based detectors.
+    Subclasses must implement the _predict method.
+    """
+    name = "U-Net Base"
+
+    def __init__(self, threshold: float = 0.5, top_k: Optional[int] = None):
+        super().__init__(threshold=threshold, top_k=top_k)
+        # Load model weights here if needed
+
+        self.model = None  # Placeholder for the U-Net model
+        
+
+    @abstractmethod
+    def _predict(self, img2d: np.ndarray) -> np.ndarray:
+        """
+        Predict a probability map from the input image.
+        Must be implemented by subclasses.
+        """
+        raise NotImplementedError
+
+    def detect(self, img2d: np.ndarray) -> List[Detection]:
+        prob_map = self._predict(img2d)
+        peaks = (prob_map >= self.threshold)
+
+        ys, xs = np.nonzero(peaks)
+        if len(xs) == 0:
+            return []
+
+        scores = prob_map[ys, xs]
+        order = np.argsort(scores)[::-1]
+        if self.top_k is not None and self.top_k > 0:
+            order = order[: self.top_k]
+
+        return [Detection(float(ys[i]), float(xs[i]), float(scores[i])) for i in order]
 
 
 # Registry (UI uses this)
 DETECTOR_REGISTRY: Dict[str, type] = {
     PeakDetector.name: PeakDetector,
     LoGDetector.name: LoGDetector,
+    UnetBaseDetector.name: UnetBaseDetector,
 }
 
 PeakDetection = Detection
