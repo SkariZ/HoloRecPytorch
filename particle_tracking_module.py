@@ -3,6 +3,7 @@ import os
 import time
 import json
 import numpy as np
+import torch
 
 from PyQt5.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QFormLayout, QScrollArea,
@@ -15,14 +16,15 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import matplotlib.pyplot as plt
 
 from backend.tracking.frame_provider import FrameProvider
-from backend.tracking.detection import channel_from_complex, PeakDetector
+from backend.tracking.detection import UnetDetector, channel_from_complex, PeakDetector
 from backend.tracking.linking import (
     link_detections, flatten_detections, save_detections_csv, save_tracks_csv
 )
 from backend.tracking.preprocess import PreprocessConfig, spatial_preprocess, temporal_subtract_pair
-from backend.tracking.detection import DETECTOR_REGISTRY, PeakDetector, LoGDetector
+from backend.tracking.detection import PeakDetector, LoGDetector, UnetDetector
+from backend.tracking.models.registry import UNET_MODEL_REGISTRY
 
-
+from matplotlib.widgets import RectangleSelector
 
 class ParticleTrackingModule(QWidget):
     def __init__(self):
@@ -33,6 +35,7 @@ class ParticleTrackingModule(QWidget):
         self.provider = None           # FrameProvider
         self.preview_img = None        # np float32 (H,W)
         self.preview_dets = []         # list of PeakDetection
+        self.fov_coords = None   # (x1, y1, x2, y2) in full-image coordinates
 
         self.save_folder = None
         self.data_path = None
@@ -135,24 +138,51 @@ class ParticleTrackingModule(QWidget):
 
         controls_layout.addLayout(form_pre)
 
+        controls_layout.addWidget(QLabel("Field of view (ROI):"))
+
+        # For roi selector
+        roi_row = QHBoxLayout()
+        self.btn_apply_roi = QPushButton("Use drawn ROI")
+        self.btn_apply_roi.clicked.connect(self._apply_roi_from_selector)
+        roi_row.addWidget(self.btn_apply_roi)
+
+        self.btn_reset_roi = QPushButton("Reset ROI")
+        self.btn_reset_roi.clicked.connect(self._reset_roi)
+        roi_row.addWidget(self.btn_reset_roi)
+
+        controls_layout.addLayout(roi_row)
+
         self.btn_preview = QPushButton("Update preview")
         self.btn_preview.clicked.connect(self._update_preview)
         controls_layout.addWidget(self.btn_preview)
 
-        controls_layout.addSpacing(10)
+        controls_layout.addSpacing(10)        
 
         # Detection controls
         controls_layout.addWidget(QLabel("Detection (on preprocessed image):"))
         form_det = QFormLayout()
 
-        # NEW: detector choice
         self.detector_combo = QComboBox()
         self.detector_combo.addItems([
             "Peaks (local max)",
             "LoG (blobs)",
-            # "Neural Net"  # add later
+            "U-Net (score map)",
         ])
         form_det.addRow("Detector:", self.detector_combo)
+
+        # U-Net model row container (hidden unless U-Net selected)
+        self.unet_row_widget = QWidget()
+        unet_row_layout = QHBoxLayout(self.unet_row_widget)
+        unet_row_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.unet_model_combo = QComboBox()
+        self.unet_model_combo.addItems(list(UNET_MODEL_REGISTRY.keys()))
+        unet_row_layout.addWidget(self.unet_model_combo, 1)
+
+        form_det.addRow("U-Net model:", self.unet_row_widget)
+
+        # start hidden
+        self.unet_row_widget.setVisible(False)
 
         # Peaks parameter (only relevant for Peaks)
         self.det_win = QSpinBox()
@@ -171,13 +201,18 @@ class ParticleTrackingModule(QWidget):
         self.det_thresh = QDoubleSpinBox()
         self.det_thresh.setRange(-1e9, 1e9)
         self.det_thresh.setDecimals(6)
-        self.det_thresh.setValue(0.0)
+        self.det_thresh.setValue(0.25)
         form_det.addRow("Threshold:", self.det_thresh)
 
         self.det_topk = QSpinBox()
-        self.det_topk.setRange(0, 1000000)
+        self.det_topk.setRange(0, 10000)
         self.det_topk.setValue(0)  # 0 = off
         form_det.addRow("Top-K (0=off):", self.det_topk)
+
+        self.border_skip = QSpinBox()
+        self.border_skip.setRange(0, 10000)
+        self.border_skip.setValue(16)
+        form_det.addRow("Skip border (px):", self.border_skip)
 
         controls_layout.addLayout(form_det)
 
@@ -185,21 +220,31 @@ class ParticleTrackingModule(QWidget):
         def _update_detector_params():
             det = self.detector_combo.currentText()
             is_peaks = det.startswith("Peaks")
-            is_log = det.startswith("LoG")
+            is_log   = det.startswith("LoG")
+            is_unet  = det.startswith("UNet") or det.startswith("U-Net")
+
+            # Peaks params
             self.det_win.setVisible(is_peaks)
             form_det.labelForField(self.det_win).setVisible(is_peaks)
+
+            # LoG params
             self.log_sigma.setVisible(is_log)
             form_det.labelForField(self.log_sigma).setVisible(is_log)
 
+            # U-Net model selector row
+            self.unet_row_widget.setVisible(is_unet)
+            # (optional) also hide/show the label:
+            form_det.labelForField(self.unet_row_widget).setVisible(is_unet)
+
+
         self.detector_combo.currentTextChanged.connect(_update_detector_params)
         _update_detector_params()
-
+    
         self.btn_detect = QPushButton("Detect on preview + overlay")
         self.btn_detect.clicked.connect(self._detect_preview)
         controls_layout.addWidget(self.btn_detect)
 
         controls_layout.addSpacing(10)
-
 
         # Tracking controls
         controls_layout.addWidget(QLabel("Tracking (all processed frames):"))
@@ -255,6 +300,18 @@ class ParticleTrackingModule(QWidget):
         self.ax = self.canvas.figure.add_subplot(111)
         self.ax.set_title("Preview")
         main_layout.addWidget(self.canvas, 3)
+
+        self._roi_selector = RectangleSelector(
+        self.ax,
+        onselect=self._on_roi_select,
+        useblit=True,
+        button=[1],           # left click
+        minspanx=5,
+        minspany=5,
+        spancoords="pixels",
+        interactive=True
+        )
+        self._roi_last = None  # temporary selection (x1,y1,x2,y2)
 
     # ---------- Helpers ----------
     def _log(self, msg: str):
@@ -338,12 +395,24 @@ class ParticleTrackingModule(QWidget):
         topk_val = int(self.det_topk.value())
         topk = None if topk_val == 0 else topk_val
         threshold = float(self.det_thresh.value())
+        border_skip = int(self.border_skip.value())
+
 
         if name.startswith("Peaks"):
-            return PeakDetector(win_size=int(self.det_win.value()), threshold=threshold, top_k=topk)
+            return PeakDetector(win_size=int(self.det_win.value()), threshold=threshold, top_k=topk, border_skip=border_skip)
+        
         elif name.startswith("LoG"):
-            from backend.tracking.detection import LoGDetector
-            return LoGDetector(sigma=float(self.log_sigma.value()), threshold=threshold, top_k=topk)
+            return LoGDetector(sigma=float(self.log_sigma.value()), threshold=threshold, top_k=topk, border_skip=border_skip)
+        
+        elif name.startswith("U-Net"):
+            model_name = self.unet_model_combo.currentText()
+            spec = UNET_MODEL_REGISTRY[model_name]
+            return UnetDetector(
+                model_spec=spec,
+                threshold=threshold,
+                top_k=topk,
+                border_skip=border_skip,
+            )
         else:
             raise ValueError(f"Unknown detector: {name}")
 
@@ -410,6 +479,7 @@ class ParticleTrackingModule(QWidget):
         try:
             field = self.provider.get_complex_frame_np(idx)
             img = channel_from_complex(field, channel)
+            img = self._apply_roi_to_image(img)
 
             # temporal subtraction: t - (t + subsize)
             if cfg.temporal_subsize > 0:
@@ -422,6 +492,7 @@ class ParticleTrackingModule(QWidget):
                     return
                 field2 = self.provider.get_complex_frame_np(j)
                 img2 = channel_from_complex(field2, channel)
+                img2 = self._apply_roi_to_image(img2)
                 pre = temporal_subtract_pair(img, img2, cfg)
             else:
                 pre = spatial_preprocess(img, cfg)
@@ -438,6 +509,40 @@ class ParticleTrackingModule(QWidget):
         self.preview_img = pre
         self.preview_dets = []  # clear overlay
         self._redraw_preview()
+
+    def _on_roi_select(self, eclick, erelease):
+        if eclick.xdata is None or eclick.ydata is None or erelease.xdata is None or erelease.ydata is None:
+            return
+        x1, y1 = int(eclick.xdata), int(eclick.ydata)
+        x2, y2 = int(erelease.xdata), int(erelease.ydata)
+        self._roi_last = (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2))
+        self._log(f"ROI drawn: {self._roi_last}")
+
+    def _apply_roi_from_selector(self):
+        if self._roi_last is None:
+            self._log("Draw an ROI on the preview first (drag a rectangle).")
+            return
+        self.fov_coords = self._roi_last
+        self._log(f"ROI applied: {self.fov_coords}")
+        self._update_preview()
+
+    def _reset_roi(self):
+        self.fov_coords = None
+        self._roi_last = None
+        self._log("ROI reset (full frame).")
+        self._update_preview()
+
+    def _apply_roi_to_image(self, img2d: np.ndarray) -> np.ndarray:
+        if self.fov_coords is None:
+            return img2d
+        x1, y1, x2, y2 = self.fov_coords
+        # clip to bounds
+        H, W = img2d.shape
+        x1 = max(0, min(x1, W-1)); x2 = max(0, min(x2, W))
+        y1 = max(0, min(y1, H-1)); y2 = max(0, min(y2, H))
+        if x2 <= x1 or y2 <= y1:
+            return img2d
+        return img2d[y1:y2, x1:x2]
 
     # ---------- Step 3: Detect + visualize ----------
     def _detect_preview(self):
@@ -502,10 +607,12 @@ class ParticleTrackingModule(QWidget):
             try:
                 field = self.provider.get_complex_frame_np(t)
                 img = channel_from_complex(field, channel)
+                img = self._apply_roi_to_image(img)
 
                 if cfg.temporal_subsize > 0:
                     field2 = self.provider.get_complex_frame_np(t + cfg.temporal_subsize)
                     img2 = channel_from_complex(field2, channel)
+                    img2 = self._apply_roi_to_image(img2)
                     pre = temporal_subtract_pair(img, img2, cfg)
                 else:
                     pre = spatial_preprocess(img, cfg)
