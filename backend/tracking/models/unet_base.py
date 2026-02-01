@@ -4,7 +4,7 @@ from torch.nn import LeakyReLU, InstanceNorm2d
 def UNetBase(in_channels: int, out_channels: int):
     model = dl.UNet2d(
         in_channels=in_channels,
-        channels=[32, 64, 128],
+        channels=[16, 32, 64],
         out_channels=out_channels,
     )
 

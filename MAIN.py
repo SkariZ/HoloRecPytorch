@@ -31,7 +31,8 @@ class WelcomeWidget(QWidget):
         msg = QLabel(
             "Welcome to the Holography Toolbox\n\n"
             "Select a module above to begin your analysis \n\n\n"
-            "Written by Fredrik Skärberg @ Department of Physics, Gothenburg University"
+            "Written by Fredrik Skärberg @ Department of Physics, Gothenburg University \n\n\n"
+            #f"Today's date: {QDate.currentDate().toString(Qt.DefaultLocaleLongDate)}"
         )
         msg.setAlignment(Qt.AlignCenter)
         msg.setStyleSheet("font-size: 16px; color: #333;")

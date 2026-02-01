@@ -21,7 +21,7 @@ from backend.tracking.linking import (
     link_detections, flatten_detections, save_detections_csv, save_tracks_csv
 )
 from backend.tracking.preprocess import PreprocessConfig, spatial_preprocess, temporal_subtract_pair
-from backend.tracking.detection import PeakDetector, LoGDetector, UnetDetector
+from backend.tracking.detection import PeakDetector, LoGDetector, UnetDetector, RVTDetector, Detection
 from backend.tracking.models.registry import UNET_MODEL_REGISTRY
 
 from matplotlib.widgets import RectangleSelector
@@ -128,13 +128,19 @@ class ParticleTrackingModule(QWidget):
         form_pre.addRow("Gaussian filter σ:", self.smooth_sigma)
 
         self.normalize_checkbox = QCheckBox("Normalize to 0–1")
-        self.normalize_checkbox.setChecked(True)
+        self.normalize_checkbox.setChecked(False)
         form_pre.addRow(self.normalize_checkbox)
 
         self.subsize_spin = QSpinBox()
         self.subsize_spin.setRange(0, 10**6)
         self.subsize_spin.setValue(0)  # 0 disables temporal subtraction
         form_pre.addRow("Window subtraction subsize:", self.subsize_spin)
+
+        # ---- Downsampling ----
+        self.downsample_combo = QComboBox()
+        self.downsample_combo.addItems(["1", "2", "4", "8"])
+        form_pre.addRow("Downsample factor:", self.downsample_combo)
+        self.downsample_combo.currentTextChanged.connect(self._reset_roi_due_to_scale_change)
 
         controls_layout.addLayout(form_pre)
 
@@ -167,6 +173,7 @@ class ParticleTrackingModule(QWidget):
             "Peaks (local max)",
             "LoG (blobs)",
             "U-Net (score map)",
+            "RVT (radial variance transform)",
         ])
         form_det.addRow("Detector:", self.detector_combo)
 
@@ -197,6 +204,27 @@ class ParticleTrackingModule(QWidget):
         self.log_sigma.setValue(2.0)
         form_det.addRow("LoG sigma:", self.log_sigma)
 
+        # --- RVT parameters (only relevant for RVT) ---
+        self.rvt_rmin = QSpinBox()
+        self.rvt_rmin.setRange(0, 999)
+        self.rvt_rmin.setValue(2)
+        form_det.addRow("RVT rmin:", self.rvt_rmin)
+
+        self.rvt_rmax = QSpinBox()
+        self.rvt_rmax.setRange(1, 999)
+        self.rvt_rmax.setValue(6)
+        form_det.addRow("RVT rmax:", self.rvt_rmax)
+
+        # optional but nice
+        self.rvt_kind = QComboBox()
+        self.rvt_kind.addItems(["basic", "normalized"])
+        form_det.addRow("RVT kind:", self.rvt_kind)
+
+        # start hidden
+        for w in [self.rvt_rmin, self.rvt_rmax, self.rvt_kind]:
+            w.setVisible(False)
+            form_det.labelForField(w).setVisible(False)
+
         # Universal controls
         self.det_thresh = QDoubleSpinBox()
         self.det_thresh.setRange(-1e9, 1e9)
@@ -206,7 +234,7 @@ class ParticleTrackingModule(QWidget):
 
         self.det_topk = QSpinBox()
         self.det_topk.setRange(0, 10000)
-        self.det_topk.setValue(0)  # 0 = off
+        self.det_topk.setValue(2500)  # 0 = off
         form_det.addRow("Top-K (0=off):", self.det_topk)
 
         self.border_skip = QSpinBox()
@@ -222,6 +250,7 @@ class ParticleTrackingModule(QWidget):
             is_peaks = det.startswith("Peaks")
             is_log   = det.startswith("LoG")
             is_unet  = det.startswith("UNet") or det.startswith("U-Net")
+            is_rvt   = det.startswith("RVT")
 
             # Peaks params
             self.det_win.setVisible(is_peaks)
@@ -236,6 +265,10 @@ class ParticleTrackingModule(QWidget):
             # (optional) also hide/show the label:
             form_det.labelForField(self.unet_row_widget).setVisible(is_unet)
 
+            # RVT params
+            for w in [self.rvt_rmin, self.rvt_rmax, self.rvt_kind]:
+                w.setVisible(is_rvt)
+                form_det.labelForField(w).setVisible(is_rvt)
 
         self.detector_combo.currentTextChanged.connect(_update_detector_params)
         _update_detector_params()
@@ -281,6 +314,22 @@ class ParticleTrackingModule(QWidget):
         self.btn_run = QPushButton("Run tracking + save CSV")
         self.btn_run.clicked.connect(self._run_tracking_all)
         controls_layout.addWidget(self.btn_run)
+
+        # --- Post-tracking analysis controls ---
+        controls_layout.addWidget(QLabel("Post-tracking analysis:"))
+
+        form_an = QFormLayout()
+
+        self.roi_radius_spin = QSpinBox()
+        self.roi_radius_spin.setRange(1, 512)
+        self.roi_radius_spin.setValue(16)
+        form_an.addRow("ROI radius (px):", self.roi_radius_spin)
+
+        controls_layout.addLayout(form_an)
+
+        self.btn_analyze = QPushButton("Run analysis (per-track metrics + plots)")
+        self.btn_analyze.clicked.connect(self._run_analysis)
+        controls_layout.addWidget(self.btn_analyze)
 
         # Log
         self.log = QTextEdit()
@@ -377,6 +426,7 @@ class ParticleTrackingModule(QWidget):
             gaussian_filter_sigma=float(self.smooth_sigma.value()),
             normalize_01=bool(self.normalize_checkbox.isChecked()),
             temporal_subsize=int(self.subsize_spin.value()),
+            downsample_factor=int(self.downsample_combo.currentText()),
         )
 
     def _rebuild_provider(self):
@@ -397,7 +447,6 @@ class ParticleTrackingModule(QWidget):
         threshold = float(self.det_thresh.value())
         border_skip = int(self.border_skip.value())
 
-
         if name.startswith("Peaks"):
             return PeakDetector(win_size=int(self.det_win.value()), threshold=threshold, top_k=topk, border_skip=border_skip)
         
@@ -413,9 +462,36 @@ class ParticleTrackingModule(QWidget):
                 top_k=topk,
                 border_skip=border_skip,
             )
+        
+        elif name.startswith("RVT"):
+            rmin = int(self.rvt_rmin.value())
+            rmax = int(self.rvt_rmax.value())
+            if rmax <= rmin:
+                raise ValueError("RVT requires rmax > rmin")
+
+            return RVTDetector(
+                rmin=rmin,
+                rmax=rmax,
+                kind=self.rvt_kind.currentText(),
+                threshold=threshold,
+                top_k=topk,
+                border_skip=border_skip,
+                peak_win=9,          # could later expose if needed
+                highpass_size=None,  # keep minimal; can add later if needed
+                upsample=1,
+                coarse_factor=1,
+                coarse_mode="add",
+                pad_mode="reflect",
+            )
+
         else:
             raise ValueError(f"Unknown detector: {name}")
 
+    def _reset_roi_due_to_scale_change(self):
+        self.fov_coords = None
+        self._roi_last = None
+        self._log("Downsample factor changed → ROI cleared (reselect ROI).")
+        self._update_preview()
 
     # ---------- Step 1: Load ----------
     def _load_data(self):
@@ -522,8 +598,14 @@ class ParticleTrackingModule(QWidget):
         if self._roi_last is None:
             self._log("Draw an ROI on the preview first (drag a rectangle).")
             return
-        self.fov_coords = self._roi_last
-        self._log(f"ROI applied: {self.fov_coords}")
+
+        ds = int(self.downsample_combo.currentText())
+        x1, y1, x2, y2 = self._roi_last
+
+        # Convert preview-space → full-res coordinates
+        self.fov_coords = (x1 * ds, y1 * ds, x2 * ds, y2 * ds)
+
+        self._log(f"ROI applied (full-res): {self.fov_coords}")
         self._update_preview()
 
     def _reset_roi(self):
@@ -535,15 +617,22 @@ class ParticleTrackingModule(QWidget):
     def _apply_roi_to_image(self, img2d: np.ndarray) -> np.ndarray:
         if self.fov_coords is None:
             return img2d
+
         x1, y1, x2, y2 = self.fov_coords
-        # clip to bounds
         H, W = img2d.shape
-        x1 = max(0, min(x1, W-1)); x2 = max(0, min(x2, W))
-        y1 = max(0, min(y1, H-1)); y2 = max(0, min(y2, H))
+
+        # clip bounds (x2/y2 are slice endpoints)
+        x1 = max(0, min(int(x1), W))
+        x2 = max(0, min(int(x2), W))
+        y1 = max(0, min(int(y1), H))
+        y2 = max(0, min(int(y2), H))
+
         if x2 <= x1 or y2 <= y1:
             return img2d
+
         return img2d[y1:y2, x1:x2]
 
+    
     # ---------- Step 3: Detect + visualize ----------
     def _detect_preview(self):
         if self.preview_img is None:
@@ -560,6 +649,24 @@ class ParticleTrackingModule(QWidget):
         self._log(f"Preview detections: {len(dets)}")
         self._redraw_preview()
 
+    def _offset_dets_to_full(self, dets):
+        if not dets:
+            return dets
+
+        # ROI offset in full-res pixels:
+        x0 = y0 = 0
+        if self.fov_coords is not None:
+            x0, y0, _, _ = self.fov_coords
+
+        ds = int(self.downsample_combo.currentText())
+
+        out = []
+        for d in dets:
+            x = float(d.x) * ds + x0
+            y = float(d.y) * ds + y0
+            out.append(Detection(y=y, x=x, score=float(d.score)))
+        return out
+
     def _redraw_preview(self):
         self.ax.clear()
         if self.preview_img is not None:
@@ -567,7 +674,7 @@ class ParticleTrackingModule(QWidget):
         if self.preview_dets:
             xs = [d.x for d in self.preview_dets]
             ys = [d.y for d in self.preview_dets]
-            self.ax.scatter(xs, ys, s=22, marker="o", facecolors="none", edgecolors="lime")
+            self.ax.scatter(xs, ys, s=40, marker="o", facecolors="none", edgecolors="lime", alpha=0.7)
         self.ax.set_title(f"Preview (frame {self.frame_spin.value()})")
         self.canvas.draw()
 
@@ -618,6 +725,7 @@ class ParticleTrackingModule(QWidget):
                     pre = spatial_preprocess(img, cfg)
 
                 dets = detector.detect(pre)
+                dets = self._offset_dets_to_full(dets)  # <-- add this line
                 detections_by_frame.append(dets)
 
             except Exception as e:
@@ -660,6 +768,23 @@ class ParticleTrackingModule(QWidget):
         self._log(f"Saved:\n  {det_path}\n  {tr_path}")
         self.status.setText(f"Done. Tracks={len(tracks)}  Detections={len(flat)}")
 
+        # --------- Step 5: Analysis ----------
+        track_ids, ts, xs, ys, scores = build_analysis_index(tracks)
+
+        np.savez(
+            os.path.join(self.save_folder, "analysis_index.npz"),
+            track_id=track_ids,
+            t=ts,
+            x=xs,
+            y=ys,
+            score=scores,
+            input_path=self.data_path,
+            roi_radius=int(self.roi_radius_spin.value()),
+            channel=self.channel_combo.currentText(),
+        )
+        self._log("Saved analysis index: analysis_index.npz")
+
+
     def cleanup(self):
         self.full_data = None
         self.provider = None
@@ -672,6 +797,7 @@ class ParticleTrackingModule(QWidget):
             "input_path": self.data_path,
             "data_shape": tuple(self.full_data.shape) if self.full_data is not None else None,
             "channel": self.channel_combo.currentText(),
+            "roi_fullres": self.fov_coords,
 
             "fft": {
                 "enabled": bool(self.fft_checkbox.isChecked()),
@@ -685,6 +811,7 @@ class ParticleTrackingModule(QWidget):
                 "gaussian_filter_sigma": float(cfg.gaussian_filter_sigma),
                 "normalize_01": bool(cfg.normalize_01),
                 "temporal_subsize": int(cfg.temporal_subsize),
+                "downsample_factor": int(cfg.downsample_factor),
             },
 
             "detection": {
@@ -828,6 +955,7 @@ class ParticleTrackingModule(QWidget):
                 "track_net_disp_max_px": _np_float(track_net_disp.max()) if track_net_disp.size else 0.0,
             },
         }
+        
         return metrics
 
 
@@ -867,8 +995,167 @@ class ParticleTrackingModule(QWidget):
                     f.write(f"{d}\n")
         self._log(f"Saved run report: {txt_path}")
 
+    def _current_fft_settings(self) -> dict:
+        return dict(
+            fft_enabled=bool(self.fft_checkbox.isChecked()),
+            orig_size=self._parse_orig_size(),
+            pupil_radius=self._parse_pupil_radius(),
+            mask_shape=self.mask_shape_combo.currentText(),
+        )
+    
+    def _run_analysis(self):
+        if not self.save_folder:
+            self._log("Select a save folder first.")
+            return
+
+        idx_path = os.path.join(self.save_folder, "analysis_index.npz")
+        if not os.path.exists(idx_path):
+            self._log("analysis_index.npz not found. Run tracking first.")
+            return
+
+        from backend.tracking.analysis import run_trackwise_analysis
+
+        roi_r = int(self.roi_radius_spin.value())
+
+        # Optional: export timeseries only for longest N tracks (0 disables)
+        export_top_n = 10  # or add a UI knob later; start with 0 or 10
+
+        try:
+            self.status.setText("Running analysis...")
+            out = run_trackwise_analysis(
+                analysis_index_path=idx_path,
+                output_folder=self.save_folder,
+                fft_settings=self._current_fft_settings(),
+                roi_radius=roi_r,
+                export_timeseries_top_n=export_top_n,
+                log_fn=self._log,
+                status_fn=self.status.setText,
+            )
+            self._log(
+                "Analysis outputs:\n"
+                f"  {out['tracks_csv']}\n"
+                f"  {out['tracks_npz']}\n"
+                f"  {out['plots_dir']}"
+            )
+            self.status.setText("Analysis done.")
+        except Exception as e:
+            self._log(f"Analysis failed: {e}")
+            self.status.setText(f"Analysis failed: {e}")
 
 
+def build_analysis_index(tracks):
+    """
+    Build flat arrays (track_id, t, x, y, score) from your tracks list.
+
+    This is intentionally tolerant to different Track formats:
+    - track.detections / track.points / track.nodes / track.path
+    - list/tuple of items
+    - items being Detection-like objects, dicts, or tuples/lists
+    """
+    ts = []
+    xs = []
+    ys = []
+    track_ids = []
+    scores = []
+
+    def _track_items(tr):
+        if hasattr(tr, "detections"):
+            return tr.detections
+        if hasattr(tr, "points"):
+            return tr.points
+        if hasattr(tr, "nodes"):
+            return tr.nodes
+        if hasattr(tr, "path"):
+            return tr.path
+        if isinstance(tr, (list, tuple)):
+            return tr
+        try:
+            return list(tr)
+        except TypeError:
+            return []
+
+    def _txy_score(item):
+        # Detection-like object
+        if hasattr(item, "x") and hasattr(item, "y"):
+            x = float(item.x)
+            y = float(item.y)
+            sc = float(getattr(item, "score", 0.0))
+
+            t = getattr(item, "t", None)
+            if t is None:
+                t = getattr(item, "frame", None)
+            if t is None:
+                raise ValueError("Track item missing t/frame")
+            return int(t), x, y, sc
+
+        # dict-like
+        if isinstance(item, dict):
+            t = item.get("t", item.get("frame", None))
+            if t is None:
+                raise ValueError("Track item missing t/frame")
+            x = float(item["x"])
+            y = float(item["y"])
+            sc = float(item.get("score", 0.0))
+            return int(t), x, y, sc
+
+        # tuple/list fallback:
+        # assume (t, x, y) or (t, x, y, score)
+        if isinstance(item, (tuple, list)) and len(item) >= 3:
+            t = int(item[0])
+            x = float(item[1])
+            y = float(item[2])
+            sc = float(item[3]) if len(item) >= 4 else 0.0
+            return t, x, y, sc
+
+        raise ValueError("Unknown track item format")
+
+    for tid, tr in enumerate(tracks):
+        items = _track_items(tr)
+        for it in items:
+            try:
+                t, x, y, sc = _txy_score(it)
+            except Exception:
+                continue
+            track_ids.append(tid)
+            ts.append(t)
+            xs.append(x)
+            ys.append(y)
+            scores.append(sc)
+
+    return (
+        np.asarray(track_ids, dtype=np.int32),
+        np.asarray(ts, dtype=np.int32),
+        np.asarray(xs, dtype=np.float32),
+        np.asarray(ys, dtype=np.float32),
+        np.asarray(scores, dtype=np.float32),
+    )
+
+def build_analysis_index_from_detections(detections_by_frame):
+    track_ids = []
+    ts = []
+    xs = []
+    ys = []
+    scores = []
+    # track_id is unknown here (since we haven't grouped by track),
+    # so we set it to -1 and let analysis work per-detection if needed.
+    # BUT: you want per-track. So we still prefer the tracks-based index
+    # once t is stored in tracks.
+    #
+    # Instead, we can build a per-track index AFTER linking if tracks include t.
+    for t, dets in enumerate(detections_by_frame):
+        for d in dets:
+            track_ids.append(-1)
+            ts.append(int(t))
+            xs.append(float(d.x))
+            ys.append(float(d.y))
+            scores.append(float(d.score))
+    return (
+        np.asarray(track_ids, np.int32),
+        np.asarray(ts, np.int32),
+        np.asarray(xs, np.float32),
+        np.asarray(ys, np.float32),
+        np.asarray(scores, np.float32),
+    )
 
 def _np_float(x):
     # make numpy scalars JSON safe
