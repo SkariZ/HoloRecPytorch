@@ -6,7 +6,6 @@ from PIL import Image
 import imageio.v2 as imageio
 
 
-
 def atoi(text):
     return int(text) if text.isdigit() else text
 
@@ -116,15 +115,39 @@ def save_video(folder, savefile, fps=12, codec='MJPG', quality=10):
     print(f"Video saved: {savefile}")
 
 
-# -------------------- Save GIF --------------------
-def save_gif(folder, savefile, duration=100, loop=0, resize=None):
+def cleanup_frames(folder, pattern="*.png", keep_first=False):
     """
-    Save frames from folder as GIF with better quality.
-    resize: tuple (width, height) if resizing is needed, otherwise None
+    Delete frame images after GIF/video creation.
+
+    Args:
+        folder (str): folder containing frames
+        pattern (str): pattern to delete, e.g. "frame_*.png"
+        keep_first (bool): keep the first frame (optional)
     """
-    imgs = glob.glob(os.path.join(folder, "*.png"))
+    files = glob.glob(os.path.join(folder, pattern))
+    if not files:
+        return
+    files.sort(key=natural_keys)
+
+    if keep_first and files:
+        files = files[1:]
+
+    for f in files:
+        try:
+            os.remove(f)
+        except Exception as e:
+            print(f"[cleanup_frames] Could not delete {f}: {e}")
+
+
+def save_gif(folder, savefile, duration=100, loop=0, resize=None, pattern="*.png"):
+    """
+    Save frames from folder as GIF.
+    pattern: which frames to include (default "*.png")
+    resize: tuple (width, height) or None
+    """
+    imgs = glob.glob(os.path.join(folder, pattern))
     if not imgs:
-        raise ValueError("No PNG files found in folder")
+        raise ValueError(f"No frames found in folder={folder} pattern={pattern}")
     imgs.sort(key=natural_keys)
 
     frames = [Image.open(f).convert("RGBA") for f in imgs]
@@ -141,3 +164,4 @@ def save_gif(folder, savefile, duration=100, loop=0, resize=None):
         loop=loop,
         optimize=True
     )
+    print(f"[save_gif] Saved GIF: {savefile}")
