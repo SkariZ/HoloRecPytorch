@@ -28,7 +28,7 @@ class FFTDecoder:
             raise ValueError(f"Unknown mask_shape: {mask_shape}")
 
         # vec_to_field expects complex mask with 1s in pupil region
-        self.mask_template = torch.tensor(m, dtype=torch.complex64, device=self.device)
+        self.mask_template = m.clone().to(self.device).type(torch.complex64)
 
     def decode(self, vec_1d):
         if not torch.is_tensor(vec_1d):
